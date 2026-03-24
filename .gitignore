@@ -1,0 +1,23 @@
+# ESP-IDF build output
+build/
+sdkconfig.old
+managed_components/
+
+# Generated audio files
+*.wav
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Editor
+.vscode/
+*.swp
+
+# Tool metadata
+.claude/
+.superpowers/
+
+# Misc
+*.zip
