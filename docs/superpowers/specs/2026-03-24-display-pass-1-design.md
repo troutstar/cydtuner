@@ -35,9 +35,11 @@ Ring constants (`RING_X0 = CX - R_OUTER`, `RING_Y0 = CY - R_OUTER`):
 ```c
 #define RING_X0   20    // CX - R_OUTER
 #define RING_Y0   60    // CY - R_OUTER
-#define RING_W   200    // R_OUTER * 2
-#define RING_H   200    // R_OUTER * 2
+#define RING_W   201    // R_OUTER * 2 + 1  (loop is inclusive: y <= CY + R_OUTER)
+#define RING_H   201    // R_OUTER * 2 + 1
 ```
+
+The `+1` is required because the render loop iterates `y <= CY + R_OUTER` (inclusive). At `y = 260`, local row = 200, requiring a 201-row buffer. Same applies on x: `xi = 100` → `x = 220`, local col = 200. `RING_W = 200` would write one element past the end.
 
 Bar constants (derived from `render_bar()` geometry):
 ```c
@@ -67,7 +69,7 @@ bar_buf = heap_caps_malloc(BAR_W * BAR_H * sizeof(uint16_t),
 if (!bar_buf) { ESP_LOGE(TAG, "bar_buf alloc failed"); abort(); }
 ```
 
-Sizes: ring = 80,000 bytes (~78KB), bar = 7,600 bytes (~7.4KB), total = 87,600 bytes (~86KB). No PSRAM on this board; both allocations are from internal DRAM DMA pool. ESP32 internal DRAM is 320KB; firmware heap at runtime is ~200KB available — allocation should succeed.
+Sizes: ring = 201×201×2 = 80,802 bytes (~79KB), bar = 200×19×2 = 7,600 bytes (~7.4KB), total = 88,402 bytes (~86KB). No PSRAM on this board; both allocations are from internal DRAM DMA pool. ESP32 internal DRAM is 320KB; firmware heap at runtime is ~200KB available — allocation should succeed.
 
 ### SPI DMA transfer size
 
