@@ -11,3 +11,7 @@ typedef enum {
 esp_err_t audio_init(audio_source_t source);
 int audio_read(int16_t *buf, size_t len);
 uint32_t audio_get_sample_rate(void);
+
+#ifdef PITCH_TEST_HARNESS
+float audio_get_position_sec(void);
+#endif

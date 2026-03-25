@@ -41,6 +41,10 @@ static FILE    *s_wav_file    = NULL;
 static uint32_t s_data_start  = 0;
 static uint32_t s_data_end    = 0;
 
+#ifdef PITCH_TEST_HARNESS
+static volatile uint32_t s_position_bytes = 0;
+#endif
+
 static int16_t s_stereo_buf[AUDIO_BUF_SAMPLES * 2];
 
 static uint16_t read_u16(FILE *f) {
@@ -122,12 +126,31 @@ int audio_read(int16_t *buf, size_t len) {
     if (!s_wav_file) return -1;
     if ((uint32_t)ftell(s_wav_file) >= s_data_end)
         fseek(s_wav_file, s_data_start, SEEK_SET);   /* loop */
-    if (s_channels == 1)
-        return (int)fread(buf, sizeof(int16_t), len, s_wav_file);
-    size_t got = fread(s_stereo_buf, sizeof(int16_t), len * 2, s_wav_file) / 2;
-    for (size_t i = 0; i < got; i++)
-        buf[i] = (int16_t)(((int32_t)s_stereo_buf[i*2] + s_stereo_buf[i*2+1]) / 2);
-    return (int)got;
+
+    int got;
+    if (s_channels == 1) {
+        got = (int)fread(buf, sizeof(int16_t), len, s_wav_file);
+    } else {
+        size_t n = fread(s_stereo_buf, sizeof(int16_t), len * 2, s_wav_file) / 2;
+        for (size_t i = 0; i < n; i++)
+            buf[i] = (int16_t)(((int32_t)s_stereo_buf[i*2] + s_stereo_buf[i*2+1]) / 2);
+        got = (int)n;
+    }
+
+#ifdef PITCH_TEST_HARNESS
+    if (got > 0 && s_wav_file)
+        s_position_bytes = (uint32_t)ftell(s_wav_file) - s_data_start;
+#endif
+
+    return got;
 }
+
+#ifdef PITCH_TEST_HARNESS
+float audio_get_position_sec(void) {
+    if (!s_wav_file || s_sample_rate == 0) return 0.0f;
+    uint32_t bytes_per_sec = s_sample_rate * s_channels * 2;
+    return (float)s_position_bytes / (float)bytes_per_sec;
+}
+#endif
 
 uint32_t audio_get_sample_rate(void) { return s_sample_rate; }
