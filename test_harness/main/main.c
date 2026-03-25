@@ -80,9 +80,9 @@ void app_main(void)
     s_sample_q = xQueueCreate(1, sizeof(int16_t *));
     s_buf_sem  = xSemaphoreCreateCounting(2, 2);
 
-    /* pitch_task stack 24KB: holds static pitch_frame_t (8.2KB) + algorithm working memory */
-    xTaskCreatePinnedToCore(audio_task, "audio", 4096*4, NULL, 5, NULL, 0);
-    xTaskCreatePinnedToCore(pitch_task, "pitch", 4096*6, NULL, 4, NULL, 1);
+    /* All large arrays in both tasks are static/heap — actual stack use is <1KB each */
+    xTaskCreatePinnedToCore(audio_task, "audio", 4096*1, NULL, 5, NULL, 0);
+    xTaskCreatePinnedToCore(pitch_task, "pitch", 4096*2, NULL, 4, NULL, 1);
 
     ESP_LOGI(TAG, "ready at http://cydtuner-test.local");
     while (1) vTaskDelay(pdMS_TO_TICKS(1000));
