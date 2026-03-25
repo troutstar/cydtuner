@@ -2,20 +2,39 @@
 #include "ili9341.h"
 #include "pitch.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
+#include "esp_log.h"
 #include <math.h>
 #include <string.h>
+
+static const char *TAG = "display";
 
 #define LCD_W       240
 #define LCD_H       320
 #define CX          (LCD_W / 2)
 #define CY          (LCD_H / 2)
-#define N_SEG       12
+#define N_SEG       36
 #define R_INNER     60
 #define R_OUTER     100
 #define K_SPEED     20.0f
 #define COL_SEG     0xFFFF
 #define COL_BG      0x0000
-#define FILL_RATIO  0.5f      /* fraction of each segment arc that is lit */
+#define FILL_RATIO  0.22f     /* fraction of each segment arc that is lit */
+
+/* Bounding boxes for partial-region blits.
+ * RING: X0 = CX - R_OUTER, Y0 = CY - R_OUTER, W/H = R_OUTER * 2 + 1
+ * The +1 is required: the render loop is inclusive (y <= CY + R_OUTER),
+ * so local row/col 200 is a valid write — needs a 201-element dimension.
+ * Must be updated if CX, CY, or R_OUTER change.
+ * BAR constants derived from render_bar() geometry. */
+#define RING_X0  20
+#define RING_Y0  60
+#define RING_W   201    /* R_OUTER * 2 + 1 */
+#define RING_H   201    /* R_OUTER * 2 + 1 */
+#define BAR_X0   20
+#define BAR_Y0   274
+#define BAR_W    200
+#define BAR_H    19
 
 /* ---- Minimal 8x8 bitmap font (A-G, #, -) for note name overlay ---------- */
 #define GLYPH_W 8
@@ -42,11 +61,20 @@ static const uint8_t *glyph_lookup(char c) {
     return NULL;
 }
 
-static float    s_phase  = 0.0f;
-static int64_t  s_last_t = 0;
-static uint16_t s_row_buf[LCD_W];
+static float     s_phase    = 0.0f;
+static int64_t   s_last_t   = 0;
+static uint16_t *s_ring_buf = NULL;
+static uint16_t *s_bar_buf  = NULL;
 
 esp_err_t display_init(void) {
+    s_ring_buf = heap_caps_malloc(RING_W * RING_H * sizeof(uint16_t),
+                                  MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    if (!s_ring_buf) { ESP_LOGE(TAG, "s_ring_buf alloc failed"); abort(); }
+
+    s_bar_buf = heap_caps_malloc(BAR_W * BAR_H * sizeof(uint16_t),
+                                 MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    if (!s_bar_buf) { ESP_LOGE(TAG, "s_bar_buf alloc failed"); abort(); }
+
     ili9341_fill_rect(0, 0, LCD_W, LCD_H, COL_BG);
     s_last_t = esp_timer_get_time();
     return ESP_OK;
@@ -56,13 +84,33 @@ static void render_bar(float cents) {
     int fill_w = (int)((fabsf(cents) / 50.0f) * 100.0f);
     if (fill_w > 100) fill_w = 100;
     int fill_x = (cents < 0.0f) ? (120 - fill_w) : 120;
-    uint16_t fill_col = (fabsf(cents) <= 5.0f) ? 0x07E0u : 0xFD20u;
+    /* Colors byte-swapped vs fill_rect: draw_bitmap sends uint16_t little-endian */
+    uint16_t fill_col = (fabsf(cents) <= 5.0f) ? 0xE007u : 0x20FDu;
 
-    ili9341_fill_rect(20,  274, 200, 19, 0x0000);
-    ili9341_fill_rect(20,  280, 200,  8, 0x1082);
-    if (fill_w > 0)
-        ili9341_fill_rect((uint16_t)fill_x, 280, (uint16_t)fill_w, 8, fill_col);
-    ili9341_fill_rect(119, 276,   3, 16, 0xFFFF);
+    memset(s_bar_buf, 0, BAR_W * BAR_H * sizeof(uint16_t));
+
+    /* Groove: screen y=280-287 → local rows 6-13, all columns */
+    for (int row = 6; row <= 13; row++)
+        for (int col = 0; col < BAR_W; col++)
+            s_bar_buf[row * BAR_W + col] = 0x8210u;
+
+    /* Meter fill over groove */
+    if (fill_w > 0) {
+        int lx0 = fill_x - BAR_X0;
+        int lx1 = lx0 + fill_w;
+        if (lx0 < 0) lx0 = 0;
+        if (lx1 > BAR_W) lx1 = BAR_W;
+        for (int row = 6; row <= 13; row++)
+            for (int col = lx0; col < lx1; col++)
+                s_bar_buf[row * BAR_W + col] = fill_col;
+    }
+
+    /* Center tick: screen y=276-291 → local rows 2-17, screen x=119-121 → local cols 99-101 */
+    for (int row = 2; row <= 17; row++)
+        for (int col = 99; col <= 101; col++)
+            s_bar_buf[row * BAR_W + col] = 0xFFFFu;
+
+    ili9341_draw_bitmap(BAR_X0, BAR_Y0, BAR_W, BAR_H, s_bar_buf);
 }
 
 void display_render_strobe(float detected_hz, const char *note) {
@@ -94,6 +142,8 @@ void display_render_strobe(float detected_hz, const char *note) {
     int txt_x1 = txt_x0 + nlen * GLYPH_W * NOTE_SCALE;
     int txt_y1 = txt_y0 + GLYPH_H * NOTE_SCALE;
 
+    memset(s_ring_buf, 0, RING_W * RING_H * sizeof(uint16_t));
+
     int y0 = CY - R_OUTER, y1 = CY + R_OUTER;
     if (y0 < 0) y0 = 0;
     if (y1 >= LCD_H) y1 = LCD_H - 1;
@@ -107,7 +157,6 @@ void display_render_strobe(float detected_hz, const char *note) {
         int x0 = CX - xi, x1 = CX + xi;
         if (x0 < 0) x0 = 0;
         if (x1 >= LCD_W) x1 = LCD_W - 1;
-        int w = x1 - x0 + 1;
 
         for (int x = x0; x <= x1; x++) {
             float dx = (float)(x - CX);
@@ -133,11 +182,11 @@ void display_render_strobe(float detected_hz, const char *note) {
                 if (rel < 0.0f) rel += seg_span;
                 col = (rel < lit_span) ? col_seg : COL_BG;
             }
-            s_row_buf[x - x0] = col;
+            s_ring_buf[(y - RING_Y0) * RING_W + (x - RING_X0)] = col;
         }
-
-        ili9341_draw_bitmap((uint16_t)x0, (uint16_t)y, (uint16_t)w, 1, s_row_buf);
     }
+
+    ili9341_draw_bitmap(RING_X0, RING_Y0, RING_W, RING_H, s_ring_buf);
 
     render_bar(cents);
 }
