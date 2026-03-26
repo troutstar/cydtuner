@@ -7,8 +7,7 @@
 #include "mdns.h"
 #include "esp_log.h"
 
-#define WIFI_SSID          "REDACTED"
-#define WIFI_PASS          "REDACTED"
+#include "wifi_credentials.h"
 #define WIFI_CONNECTED_BIT BIT0
 
 static const char        *TAG = "wifi";

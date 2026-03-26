@@ -19,5 +19,8 @@ __pycache__/
 .claude/
 .superpowers/
 
+# Credentials — never commit
+wifi_credentials.h
+
 # Misc
 *.zip
