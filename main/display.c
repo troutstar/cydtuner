@@ -28,14 +28,14 @@ static inline float fast_atan2f(float y, float x)
 #define LCD_H       320
 #define CX          (LCD_W / 2)
 #define CY          (LCD_H / 2)
-#define N_SEG       36
+#define N_SEG       18
 #define R_INNER     60
 #define R_OUTER     100
 #define STRIP_H     8    /* render arc in horizontal strips; buf = RING_W*STRIP_H*2 ≈ 3KB */
 #define K_SPEED     20.0f
 #define COL_SEG     0xFFFF
 #define COL_BG      0x0000
-#define FILL_RATIO  0.22f     /* fraction of each segment arc that is lit */
+#define FILL_RATIO  0.45f     /* fraction of each segment arc that is lit */
 
 /* 120-degree arc centred at the top of the circle (-90 degrees / -pi/2 in
  * fast_atan2f convention where y increases downward on screen).
