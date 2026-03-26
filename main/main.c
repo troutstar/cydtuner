@@ -43,8 +43,7 @@ static void pitch_task(void *arg) {
             pitch_hz_to_note(hz, note_log, sizeof(note_log));
             float cents_log = pitch_hz_to_cents(hz);
             ESP_LOGI("pitch", "%.2f Hz  %s  %+.0f cents", hz, note_log, (double)cents_log);
-            if (hz > 0.0f) last = hz;
-            xQueueOverwrite(s_freq_q, &last);
+            xQueueOverwrite(s_freq_q, &hz);
         }
     }
 }
@@ -54,9 +53,13 @@ static void display_task(void *arg) {
     char note[4] = "-";
     for (;;) {
         float hz;
-        if (xQueueReceive(s_freq_q, &hz, pdMS_TO_TICKS(33)) == pdTRUE && hz > 0.0f) {
-            last = hz;
-            pitch_hz_to_note(hz, note, sizeof(note));
+        if (xQueueReceive(s_freq_q, &hz, pdMS_TO_TICKS(33)) == pdTRUE) {
+            if (hz > 0.0f) {
+                last = hz;
+                pitch_hz_to_note(hz, note, sizeof(note));
+            } else {
+                last = 0.0f;
+            }
         }
         display_render_strobe(last, note);
     }

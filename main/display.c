@@ -144,6 +144,17 @@ void display_render_strobe(float detected_hz, const char *note) {
     if (dt > 0.1f) dt = 0.1f;
     s_last_t = now;
 
+    if (detected_hz <= 0.0f) {
+        s_ref_hz = 0.0f;
+        memset(s_ring_buf, 0, RING_W * STRIP_H * sizeof(uint16_t));
+        for (int sy = RING_Y0; sy < RING_Y0 + RING_H; sy += STRIP_H) {
+            int rows = sy + STRIP_H <= RING_Y0 + RING_H ? STRIP_H : (RING_Y0 + RING_H - sy);
+            ili9341_draw_bitmap(RING_X0, sy, RING_W, rows, s_ring_buf);
+        }
+        render_bar(0.0f);
+        return;
+    }
+
     /* Hysteresis reference: only snap to a new semitone when the detected
      * pitch is more than 65 cents away from the current reference.
      * Without this, the reference snaps at ±50 cents (the mathematical
@@ -230,7 +241,7 @@ void display_render_strobe(float detected_hz, const char *note) {
                         }
                     }
                 } else {
-                    float angle = fast_atan2f(dy, dx);
+                    float angle = atan2f(dy, dx);
                     float rel   = fmodf(angle - s_phase, seg_span);
                     if (rel < 0.0f) rel += seg_span;
                     col = (rel < lit_span) ? col_seg : COL_BG;
