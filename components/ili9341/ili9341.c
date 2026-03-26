@@ -65,7 +65,7 @@ esp_err_t ili9341_init(void) {
     lcd_cmd(0xC1); lcd_byte(0x11);
     lcd_cmd(0xC5); lcd_data((uint8_t[]){0x35,0x3E}, 2);
     lcd_cmd(0xC7); lcd_byte(0xBE);
-    lcd_cmd(0x36); lcd_byte(0x48);   /* MADCTL: portrait, BGR */
+    lcd_cmd(0x36); lcd_byte(0x88);   /* MADCTL: portrait 180°, BGR — USB connector at physical top */
     lcd_cmd(0x3A); lcd_byte(0x55);   /* RGB565 */
     lcd_cmd(0xB1); lcd_data((uint8_t[]){0x00,0x1B}, 2);
     lcd_cmd(0xF2); lcd_byte(0x08);

@@ -27,7 +27,7 @@ static inline float fast_atan2f(float y, float x)
 #define LCD_W       240
 #define LCD_H       320
 #define CX          (LCD_W / 2)
-#define CY          (LCD_H / 2)
+#define CY          120
 #define N_SEG       18
 #define R_INNER     60
 #define R_OUTER     100
@@ -44,8 +44,8 @@ static inline float fast_atan2f(float y, float x)
 #define ARC_MAX_ANGLE  (-1.0f * (float)M_PI / 6.0f)   /* -30  degrees */
 
 /* Bounding box for the arc region.
- * Arc centre is at (CX, CY) = (120, 160).  Arc pixels occupy:
- *   y: [CY - R_OUTER, CY - R_INNER*sin(30)] = [60, 130]
+ * Arc centre is at (CX, CY) = (120, 120).  Arc pixels occupy:
+ *   y: [CY - R_OUTER, CY - R_INNER*sin(30)] = [20, 90]
  * Add 5-pixel bottom margin → RING_H = R_OUTER - R_INNER/2 + 5 = 75. */
 #define RING_X0  (CX - R_OUTER)
 #define RING_Y0  (CY - R_OUTER)
@@ -56,7 +56,7 @@ static inline float fast_atan2f(float y, float x)
 #define NOTE_W   100
 #define NOTE_H   36
 #define NOTE_X0  (CX - NOTE_W / 2)
-#define NOTE_Y0  148
+#define NOTE_Y0  108
 
 #define BAR_X0   20
 #define BAR_Y0   274
