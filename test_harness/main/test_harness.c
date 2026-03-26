@@ -25,20 +25,36 @@ static SemaphoreHandle_t s_history_mutex;
 /* ---- WebSocket notify queue ---------------------------------------------- */
 static QueueHandle_t     s_ws_notify_q;
 
-/* ---- Ground truth table (from claudesweeps.py) --------------------------- */
-#define GT_NOTE_DUR_SEC    12.0f
-#define GT_SILENCE_DUR_SEC  1.5f
-#define GT_SLOT_SEC        (GT_NOTE_DUR_SEC + GT_SILENCE_DUR_SEC)
-#define GT_LOCK_OFFSET_SEC  9.0f   /* sweep locked at target only for last 3 s */
-#define GT_N_NOTES         17
+/* ---- Ground truth table (from gen_tuning_sim.py) ------------------------- */
+/* Each slot: 2.5s pluck at fixed Hz + 0.6s silence = 3.1s.
+ * Leading silence: 1.0s before first pluck.
+ * 17 strings × 5 plucks = 85 slots total.
+ * Pluck sequence per string: -50, -20, +12, -5, 0 cents. */
+#define GT_LEADING_SILENCE  1.0f
+#define GT_PLUCK_DUR        2.5f
+#define GT_SILENCE_DUR      0.6f
+#define GT_SLOT_DUR         (GT_PLUCK_DUR + GT_SILENCE_DUR)
+#define GT_LOCK_OFFSET      0.3f   /* ignore first 300ms transient after pluck */
+#define GT_N_SLOTS          85
 
-static const struct { float hz; } s_gt_table[GT_N_NOTES] = {
-    {  41.20f }, {  55.00f }, {  61.74f },
-    {  73.42f }, {  82.41f }, {  92.50f },
-    {  98.00f }, { 110.00f }, { 123.47f },
-    { 146.83f }, { 164.81f }, { 185.00f },
-    { 196.00f }, { 207.65f }, { 246.94f },
-    { 277.18f }, { 329.63f },
+static const float s_gt_table[GT_N_SLOTS] = {
+    /* E1  */ 40.027f, 40.727f, 41.487f, 41.081f, 41.200f,
+    /* A1  */ 53.434f, 54.368f, 55.383f, 54.841f, 55.000f,
+    /* B1  */ 59.982f, 61.031f, 62.169f, 61.562f, 61.740f,
+    /* D2  */ 71.330f, 72.577f, 73.931f, 73.208f, 73.420f,
+    /* E2  */ 80.064f, 81.463f, 82.983f, 82.172f, 82.410f,
+    /* F#2 */ 89.867f, 91.438f, 93.143f, 92.233f, 92.500f,
+    /* G2  */ 95.210f, 96.874f, 98.682f, 97.717f, 98.000f,
+    /* A2  */106.869f,108.737f,110.765f,109.683f,110.000f,
+    /* B2  */119.955f,122.052f,124.329f,123.114f,123.470f,
+    /* D3  */142.650f,145.144f,147.851f,146.407f,146.830f,
+    /* E3  */160.118f,162.917f,165.956f,164.335f,164.810f,
+    /* F#3 */179.733f,182.875f,186.287f,184.466f,185.000f,
+    /* G3  */190.420f,193.749f,197.363f,195.435f,196.000f,
+    /* G#3 */201.739f,205.265f,209.094f,207.051f,207.650f,
+    /* B3  */239.910f,244.104f,248.658f,246.228f,246.940f,
+    /* C#4 */269.289f,273.996f,279.108f,276.381f,277.180f,
+    /* E4  */320.246f,325.844f,331.923f,328.679f,329.630f,
 };
 
 /* ---- Init ---------------------------------------------------------------- */
@@ -167,13 +183,14 @@ void test_harness_history_clear(void)
 
 float test_harness_ground_truth(float pos_sec)
 {
-    if (pos_sec < 0.0f) return 0.0f;
-    int slot = (int)(pos_sec / GT_SLOT_SEC);
-    if (slot >= GT_N_NOTES) return 0.0f;
-    float offset = pos_sec - (float)slot * GT_SLOT_SEC;
-    if (offset >= GT_NOTE_DUR_SEC) return 0.0f;  /* silence gap */
-    if (offset < GT_LOCK_OFFSET_SEC) return 0.0f; /* approach/hunt phase */
-    return s_gt_table[slot].hz;
+    if (pos_sec < GT_LEADING_SILENCE) return 0.0f;
+    float t    = pos_sec - GT_LEADING_SILENCE;
+    int   slot = (int)(t / GT_SLOT_DUR);
+    if (slot >= GT_N_SLOTS) return 0.0f;
+    float offset = t - (float)slot * GT_SLOT_DUR;
+    if (offset >= GT_PLUCK_DUR) return 0.0f;      /* silence between plucks */
+    if (offset < GT_LOCK_OFFSET) return 0.0f;     /* ignore pluck transient */
+    return s_gt_table[slot];
 }
 
 /* ---- WS notify queue handle ---------------------------------------------- */
