@@ -167,7 +167,13 @@ void display_render_strobe(float detected_hz, const char *note) {
     if (fabsf(1200.0f * log2f(detected_hz / s_ref_hz)) > 65.0f)
         s_ref_hz = nearest_hz;
 
-    s_phase += 2.0f * (float)M_PI * (detected_hz - nearest_hz) / nearest_hz * K_SPEED * dt;
+    /* Clamp per-frame delta to half a segment width (Nyquist for 36-segment pattern).
+     * Exceeding this causes the wagon-wheel effect — apparent backward rotation. */
+    float dphi = 2.0f * (float)M_PI * (detected_hz - nearest_hz) / nearest_hz * K_SPEED * dt;
+    const float max_dphi = (float)M_PI / (float)N_SEG;
+    if (dphi >  max_dphi) dphi =  max_dphi;
+    if (dphi < -max_dphi) dphi = -max_dphi;
+    s_phase += dphi;
     s_phase = fmodf(s_phase, 2.0f * (float)M_PI);
 
     uint16_t col_seg = (fabsf(cents) <= 5.0f) ? 0xE007u : 0xFFFFu;
