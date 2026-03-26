@@ -14,8 +14,10 @@ void pitch_hz_to_note(float hz, char *buf, size_t len) {
     if (hz < 20.0f || len < 2) { buf[0] = '-'; buf[1] = '\0'; return; }
     int midi = (int)roundf(69.0f + 12.0f * log2f(hz / 440.0f));
     const char *name = s_note_names[((midi % 12) + 12) % 12];
+    int octave = midi / 12 - 1;
     size_t i = 0;
     while (name[i] && i < len - 1) { buf[i] = name[i]; i++; }
+    if (i < len - 1 && octave >= 0 && octave <= 9) buf[i++] = '0' + octave;
     buf[i] = '\0';
 }
 

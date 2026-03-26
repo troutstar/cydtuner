@@ -1,8 +1,10 @@
 #include "httpd.h"
 #include "test_harness.h"
+#include "audio.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -13,12 +15,15 @@
 #include <math.h>
 #include <stdlib.h>
 
+extern void main_get_diag(int *q_waiting, int *sem_count,
+                           uint32_t *audio_hwm, uint32_t *pitch_hwm, uint32_t *display_hwm);
+
 static const char *TAG = "httpd";
 
 static httpd_handle_t s_server = NULL;
 
 /* ---- Snapshot buffer — allocated in httpd_start_server() before tasks ---- */
-#define SNAP_BUFSZ 20480
+#define SNAP_BUFSZ 12288   /* reduced from 20480 — saves 8 KB heap */
 static char *s_snap_buf = NULL;
 
 /* ---- WebSocket client list ----------------------------------------------- */
@@ -296,6 +301,64 @@ static esp_err_t ws_handler(httpd_req_t *req)
     return ret;
 }
 
+/* ---- POST /history/clear ------------------------------------------------- */
+static esp_err_t history_clear_handler(httpd_req_t *req)
+{
+    test_harness_history_clear();
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"ok\":true}");
+}
+
+/* ---- GET /synth ---------------------------------------------------------- */
+static esp_err_t synth_get_handler(httpd_req_t *req)
+{
+    char buf[32];
+    int len = snprintf(buf, sizeof(buf), "{\"hz\":%.4f}\n", (double)audio_synth_get_hz());
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, buf, len);
+}
+
+/* ---- POST /synth --------------------------------------------------------- */
+static esp_err_t synth_post_handler(httpd_req_t *req)
+{
+    char body[64] = {0};
+    int received = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (received <= 0) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty body"); return ESP_FAIL; }
+    body[received] = '\0';
+    cJSON *root = cJSON_Parse(body);
+    if (!root) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON"); return ESP_FAIL; }
+    cJSON *item = cJSON_GetObjectItem(root, "hz");
+    if (item && cJSON_IsNumber(item)) audio_synth_set_hz((float)item->valuedouble);
+    cJSON_Delete(root);
+    httpd_resp_set_status(req, "200 OK");
+    return httpd_resp_send(req, NULL, 0);
+}
+
+/* ---- GET /diag ----------------------------------------------------------- */
+static esp_err_t diag_get_handler(httpd_req_t *req)
+{
+    int q_waiting, sem_count;
+    uint32_t audio_hwm, pitch_hwm, display_hwm;
+    main_get_diag(&q_waiting, &sem_count, &audio_hwm, &pitch_hwm, &display_hwm);
+
+    char buf[384];
+    int len = snprintf(buf, sizeof(buf),
+        "{\"uptime_ms\":%llu"
+        ",\"heap_free\":%u,\"heap_min\":%u"
+        ",\"dma_free\":%u,\"dma_min\":%u"
+        ",\"sample_q_waiting\":%d,\"buf_sem_count\":%d"
+        ",\"audio_stack_hwm\":%lu,\"pitch_stack_hwm\":%lu,\"display_stack_hwm\":%lu}",
+        (unsigned long long)(esp_timer_get_time() / 1000),
+        (unsigned)esp_get_free_heap_size(),
+        (unsigned)esp_get_minimum_free_heap_size(),
+        (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL),
+        (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL),
+        q_waiting, sem_count,
+        audio_hwm, pitch_hwm, display_hwm);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, buf, len);
+}
+
 /* ---- httpd_start_server -------------------------------------------------- */
 esp_err_t httpd_start_server(void)
 {
@@ -306,18 +369,23 @@ esp_err_t httpd_start_server(void)
     if (!s_ws_mutex) return ESP_ERR_NO_MEM;
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.lru_purge_enable = true;
-    config.max_open_sockets = 7;
+    config.lru_purge_enable  = true;
+    config.max_open_sockets  = 2;
+    config.max_uri_handlers  = 12;
 
     esp_err_t err = httpd_start(&s_server, &config);
     if (err != ESP_OK) { ESP_LOGE(TAG, "httpd_start failed: %s", esp_err_to_name(err)); return err; }
 
     httpd_uri_t uris[] = {
+        { .uri = "/diag",     .method = HTTP_GET,  .handler = diag_get_handler     },
         { .uri = "/params",   .method = HTTP_GET,  .handler = params_get_handler   },
         { .uri = "/params",   .method = HTTP_POST, .handler = params_post_handler  },
         { .uri = "/snapshot", .method = HTTP_GET,  .handler = snapshot_get_handler },
         { .uri = "/stats",    .method = HTTP_GET,  .handler = stats_get_handler    },
         { .uri = "/history",  .method = HTTP_GET,  .handler = history_get_handler  },
+        { .uri = "/history/clear", .method = HTTP_POST, .handler = history_clear_handler },
+        { .uri = "/synth",    .method = HTTP_GET,  .handler = synth_get_handler    },
+        { .uri = "/synth",    .method = HTTP_POST, .handler = synth_post_handler   },
         { .uri = "/ws",       .method = HTTP_GET,  .handler = ws_handler,
           .is_websocket = true },
     };
@@ -326,7 +394,7 @@ esp_err_t httpd_start_server(void)
 
     xTaskCreatePinnedToCore(ws_sender_task, "ws_send", 4096*2, NULL, 2, NULL, 0);
 
-    ESP_LOGI(TAG, "HTTP server started (/params /snapshot /stats /history /ws)");
+    ESP_LOGI(TAG, "HTTP server started (/params /snapshot /stats /history /synth /ws)");
     return ESP_OK;
 }
 

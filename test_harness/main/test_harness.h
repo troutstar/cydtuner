@@ -64,6 +64,7 @@ void test_harness_get_latest_compact(compact_frame_t *out);
 /* History — ring buffer of last 200 compact frames */
 #define HISTORY_LEN 200
 int  test_harness_get_history(compact_frame_t *out, int max_n);
+void test_harness_history_clear(void);
 
 /* Ground truth — returns expected Hz for given WAV position, 0.0 = silence/unknown */
 float test_harness_ground_truth(float pos_sec);

@@ -1,6 +1,7 @@
 #include "audio.h"
 #include "driver/gpio.h"
 #include "driver/spi_common.h"
+#include <math.h>
 #include "driver/sdspi_host.h"
 #include "sdmmc_cmd.h"
 #include "esp_vfs_fat.h"
@@ -35,14 +36,17 @@ esp_err_t __wrap_sdmmc_init_spi_crc(sdmmc_card_t *card)
 #define SD_PIN_MISO  19
 #define SD_PIN_CS     5
 
-static uint32_t s_sample_rate = 0;
-static uint16_t s_channels    = 0;
-static FILE    *s_wav_file    = NULL;
-static uint32_t s_data_start  = 0;
-static uint32_t s_data_end    = 0;
+static audio_source_t s_source      = AUDIO_SOURCE_WAV_FILE;
+static uint32_t       s_sample_rate = 0;
+static uint16_t       s_channels    = 0;
+static FILE          *s_wav_file    = NULL;
+static uint32_t       s_data_start  = 0;
+static uint32_t       s_data_end    = 0;
 
 #ifdef PITCH_TEST_HARNESS
 static volatile uint32_t s_position_bytes = 0;
+static volatile float    s_synth_hz       = 440.0f;
+static float             s_synth_phase    = 0.0f;
 #endif
 
 static int16_t s_stereo_buf[AUDIO_BUF_SAMPLES * 2];
@@ -58,6 +62,16 @@ static uint32_t read_u32(FILE *f) {
 }
 
 esp_err_t audio_init(audio_source_t source) {
+    s_source = source;
+#ifdef PITCH_TEST_HARNESS
+    if (source == AUDIO_SOURCE_SYNTH) {
+        s_sample_rate = 44100;
+        s_synth_phase = 0.0f;
+        ESP_LOGI(TAG, "synth source: %.1f Hz, %lu sample/s",
+                 (double)s_synth_hz, (unsigned long)s_sample_rate);
+        return ESP_OK;
+    }
+#endif
     if (source != AUDIO_SOURCE_WAV_FILE) return ESP_ERR_NOT_SUPPORTED;
 
     gpio_set_pull_mode(SD_PIN_MISO, GPIO_PULLUP_ONLY);
@@ -123,6 +137,19 @@ esp_err_t audio_init(audio_source_t source) {
 }
 
 int audio_read(int16_t *buf, size_t len) {
+#ifdef PITCH_TEST_HARNESS
+    if (s_source == AUDIO_SOURCE_SYNTH) {
+        float hz     = s_synth_hz;
+        float dphase = 2.0f * (float)M_PI * hz / (float)s_sample_rate;
+        for (size_t i = 0; i < len; i++) {
+            buf[i] = (int16_t)(sinf(s_synth_phase) * 16384.0f);
+            s_synth_phase += dphase;
+            if (s_synth_phase >= 2.0f * (float)M_PI)
+                s_synth_phase -= 2.0f * (float)M_PI;
+        }
+        return (int)len;
+    }
+#endif
     if (!s_wav_file) return -1;
     if ((uint32_t)ftell(s_wav_file) >= s_data_end)
         fseek(s_wav_file, s_data_start, SEEK_SET);   /* loop */
@@ -154,3 +181,8 @@ float audio_get_position_sec(void) {
 #endif
 
 uint32_t audio_get_sample_rate(void) { return s_sample_rate; }
+
+#ifdef PITCH_TEST_HARNESS
+void audio_synth_set_hz(float hz) { if (hz > 0.0f) s_synth_hz = hz; }
+float audio_synth_get_hz(void) { return (s_source == AUDIO_SOURCE_SYNTH) ? s_synth_hz : 0.0f; }
+#endif

@@ -27,8 +27,9 @@ static QueueHandle_t     s_ws_notify_q;
 
 /* ---- Ground truth table (from claudesweeps.py) --------------------------- */
 #define GT_NOTE_DUR_SEC    12.0f
-#define GT_SILENCE_DUR_SEC  0.5f
+#define GT_SILENCE_DUR_SEC  1.5f
 #define GT_SLOT_SEC        (GT_NOTE_DUR_SEC + GT_SILENCE_DUR_SEC)
+#define GT_LOCK_OFFSET_SEC  9.0f   /* sweep locked at target only for last 3 s */
 #define GT_N_NOTES         17
 
 static const struct { float hz; } s_gt_table[GT_N_NOTES] = {
@@ -154,6 +155,14 @@ int test_harness_get_history(compact_frame_t *out, int max_n)
     return n;
 }
 
+void test_harness_history_clear(void)
+{
+    xSemaphoreTake(s_history_mutex, portMAX_DELAY);
+    s_history_head  = 0;
+    s_history_count = 0;
+    xSemaphoreGive(s_history_mutex);
+}
+
 /* ---- Ground truth -------------------------------------------------------- */
 
 float test_harness_ground_truth(float pos_sec)
@@ -163,6 +172,7 @@ float test_harness_ground_truth(float pos_sec)
     if (slot >= GT_N_NOTES) return 0.0f;
     float offset = pos_sec - (float)slot * GT_SLOT_SEC;
     if (offset >= GT_NOTE_DUR_SEC) return 0.0f;  /* silence gap */
+    if (offset < GT_LOCK_OFFSET_SEC) return 0.0f; /* approach/hunt phase */
     return s_gt_table[slot].hz;
 }
 

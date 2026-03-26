@@ -1,7 +1,7 @@
 idf_component_register(
     SRCS "main.c" "wifi.c" "httpd.c" "test_harness.c"
-         "../../main/pitch.c" "../../main/audio.c"
-    # "../../main" headers needed for pitch.h, audio.h, etc.
+         "../../main/pitch.c" "../../main/audio.c" "../../main/display.c"
+    # "../../main" headers needed for pitch.h, audio.h, display.h, etc.
     INCLUDE_DIRS "." "../../main"
     REQUIRES
         esp_wifi
@@ -15,6 +15,7 @@ idf_component_register(
         driver
         sdmmc
         fatfs
+        ili9341
 )
 
 target_link_options(${COMPONENT_LIB} INTERFACE
