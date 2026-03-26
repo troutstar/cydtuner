@@ -155,21 +155,20 @@ void display_render_strobe(float detected_hz, const char *note) {
         return;
     }
 
-    /* Rotation always uses the nearest semitone — consistent direction regardless
-     * of which note is displayed.  Hysteresis only affects the label (s_ref_hz). */
+    /* Hysteresis reference: snap to nearest note only when deviation exceeds 65 cents.
+     * Both label and rotation use s_ref_hz so they always agree — when the label
+     * changes note, the rotation direction changes with it. */
     float nearest_hz = pitch_hz_to_nearest_hz(detected_hz);
-    float cents      = 1200.0f * log2f(detected_hz / nearest_hz);
-
-    /* Label hysteresis: only snap to a new semitone when more than 65 cents away,
-     * so the note name doesn't flicker at the ±50 cent boundary. */
     if (s_ref_hz <= 0.0f)
         s_ref_hz = nearest_hz;
     if (fabsf(1200.0f * log2f(detected_hz / s_ref_hz)) > 65.0f)
         s_ref_hz = nearest_hz;
 
+    float cents = 1200.0f * log2f(detected_hz / s_ref_hz);
+
     /* Clamp per-frame delta to half a segment width (Nyquist for 36-segment pattern).
      * Exceeding this causes the wagon-wheel effect — apparent backward rotation. */
-    float dphi = 2.0f * (float)M_PI * (detected_hz - nearest_hz) / nearest_hz * K_SPEED * dt;
+    float dphi = 2.0f * (float)M_PI * (detected_hz - s_ref_hz) / s_ref_hz * K_SPEED * dt;
     const float max_dphi = (float)M_PI / (float)N_SEG;
     if (dphi >  max_dphi) dphi =  max_dphi;
     if (dphi < -max_dphi) dphi = -max_dphi;
