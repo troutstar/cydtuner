@@ -155,20 +155,19 @@ void display_render_strobe(float detected_hz, const char *note) {
         return;
     }
 
-    /* Hysteresis reference: only snap to a new semitone when the detected
-     * pitch is more than 65 cents away from the current reference.
-     * Without this, the reference snaps at ±50 cents (the mathematical
-     * midpoint) and the rotation direction abruptly reverses mid-bend,
-     * looking like the display is spinning for the adjacent note. */
-    if (s_ref_hz <= 0.0f)
-        s_ref_hz = pitch_hz_to_nearest_hz(detected_hz);
-    float cents = 1200.0f * log2f(detected_hz / s_ref_hz);
-    if (fabsf(cents) > 65.0f) {
-        s_ref_hz = pitch_hz_to_nearest_hz(detected_hz);
-        cents    = 1200.0f * log2f(detected_hz / s_ref_hz);
-    }
+    /* Rotation always uses the nearest semitone — consistent direction regardless
+     * of which note is displayed.  Hysteresis only affects the label (s_ref_hz). */
+    float nearest_hz = pitch_hz_to_nearest_hz(detected_hz);
+    float cents      = 1200.0f * log2f(detected_hz / nearest_hz);
 
-    s_phase -= 2.0f * (float)M_PI * (detected_hz - s_ref_hz) / s_ref_hz * K_SPEED * dt;
+    /* Label hysteresis: only snap to a new semitone when more than 65 cents away,
+     * so the note name doesn't flicker at the ±50 cent boundary. */
+    if (s_ref_hz <= 0.0f)
+        s_ref_hz = nearest_hz;
+    if (fabsf(1200.0f * log2f(detected_hz / s_ref_hz)) > 65.0f)
+        s_ref_hz = nearest_hz;
+
+    s_phase += 2.0f * (float)M_PI * (detected_hz - nearest_hz) / nearest_hz * K_SPEED * dt;
     s_phase = fmodf(s_phase, 2.0f * (float)M_PI);
 
     uint16_t col_seg = (fabsf(cents) <= 5.0f) ? 0xE007u : 0xFFFFu;
