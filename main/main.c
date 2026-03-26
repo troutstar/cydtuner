@@ -32,7 +32,6 @@ static void audio_task(void *arg) {
 
 static void pitch_task(void *arg) {
     float sr = (float)audio_get_sample_rate();
-    float last = 440.0f;
     for (;;) {
         int16_t *buf = NULL;
         if (xQueueReceive(s_sample_q, &buf, portMAX_DELAY) == pdTRUE) {
