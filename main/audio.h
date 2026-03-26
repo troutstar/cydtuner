@@ -17,6 +17,8 @@ uint32_t audio_get_sample_rate(void);
 
 #ifdef PITCH_TEST_HARNESS
 float audio_get_position_sec(void);
-void  audio_synth_set_hz(float hz);
-float audio_synth_get_hz(void);
+void           audio_synth_set_hz(float hz);
+float          audio_synth_get_hz(void);
+void           audio_set_source(audio_source_t src);
+audio_source_t audio_get_source(void);
 #endif

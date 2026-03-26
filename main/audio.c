@@ -185,4 +185,21 @@ uint32_t audio_get_sample_rate(void) { return s_sample_rate; }
 #ifdef PITCH_TEST_HARNESS
 void audio_synth_set_hz(float hz) { if (hz > 0.0f) s_synth_hz = hz; }
 float audio_synth_get_hz(void) { return (s_source == AUDIO_SOURCE_SYNTH) ? s_synth_hz : 0.0f; }
+
+void audio_set_source(audio_source_t src)
+{
+    if (src == s_source) return;
+    s_source = src;
+    if (src == AUDIO_SOURCE_SYNTH) {
+        s_synth_phase = 0.0f;
+        if (s_sample_rate == 0) s_sample_rate = 44100;
+    } else if (src == AUDIO_SOURCE_WAV_FILE) {
+        if (s_wav_file) {
+            fseek(s_wav_file, s_data_start, SEEK_SET);
+            s_position_bytes = 0;
+        }
+    }
+}
+
+audio_source_t audio_get_source(void) { return s_source; }
 #endif

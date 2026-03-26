@@ -359,6 +359,37 @@ static esp_err_t diag_get_handler(httpd_req_t *req)
     return httpd_resp_send(req, buf, len);
 }
 
+/* ---- GET /source --------------------------------------------------------- */
+static esp_err_t source_get_handler(httpd_req_t *req)
+{
+    const char *name = (audio_get_source() == AUDIO_SOURCE_SYNTH) ? "synth" : "wav";
+    char buf[32];
+    int len = snprintf(buf, sizeof(buf), "{\"source\":\"%s\"}\n", name);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, buf, len);
+}
+
+/* ---- POST /source -------------------------------------------------------- */
+static esp_err_t source_post_handler(httpd_req_t *req)
+{
+    char body[32] = {0};
+    int received = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (received <= 0) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty body"); return ESP_FAIL; }
+    body[received] = '\0';
+    cJSON *root = cJSON_Parse(body);
+    if (!root) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON"); return ESP_FAIL; }
+    cJSON *item = cJSON_GetObjectItem(root, "source");
+    if (item && cJSON_IsString(item)) {
+        if (strcmp(item->valuestring, "synth") == 0)
+            audio_set_source(AUDIO_SOURCE_SYNTH);
+        else if (strcmp(item->valuestring, "wav") == 0)
+            audio_set_source(AUDIO_SOURCE_WAV_FILE);
+    }
+    cJSON_Delete(root);
+    httpd_resp_set_status(req, "200 OK");
+    return httpd_resp_send(req, NULL, 0);
+}
+
 /* ---- httpd_start_server -------------------------------------------------- */
 esp_err_t httpd_start_server(void)
 {
@@ -371,7 +402,7 @@ esp_err_t httpd_start_server(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable  = true;
     config.max_open_sockets  = 2;
-    config.max_uri_handlers  = 12;
+    config.max_uri_handlers  = 14;
 
     esp_err_t err = httpd_start(&s_server, &config);
     if (err != ESP_OK) { ESP_LOGE(TAG, "httpd_start failed: %s", esp_err_to_name(err)); return err; }
@@ -386,6 +417,8 @@ esp_err_t httpd_start_server(void)
         { .uri = "/history/clear", .method = HTTP_POST, .handler = history_clear_handler },
         { .uri = "/synth",    .method = HTTP_GET,  .handler = synth_get_handler    },
         { .uri = "/synth",    .method = HTTP_POST, .handler = synth_post_handler   },
+        { .uri = "/source",   .method = HTTP_GET,  .handler = source_get_handler   },
+        { .uri = "/source",   .method = HTTP_POST, .handler = source_post_handler  },
         { .uri = "/ws",       .method = HTTP_GET,  .handler = ws_handler,
           .is_websocket = true },
     };

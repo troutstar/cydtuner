@@ -124,7 +124,7 @@ void app_main(void)
     HEAP_LOG("display_init");
     ESP_ERROR_CHECK(test_harness_init());
     HEAP_LOG("test_harness_init");
-    ESP_ERROR_CHECK(audio_init(AUDIO_SOURCE_SYNTH));
+    ESP_ERROR_CHECK(audio_init(AUDIO_SOURCE_WAV_FILE));
     HEAP_LOG("audio_init");
     ESP_ERROR_CHECK(pitch_init(AUDIO_BUF_SAMPLES));
     HEAP_LOG("pitch_init");
