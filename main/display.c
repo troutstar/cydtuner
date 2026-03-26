@@ -168,7 +168,7 @@ void display_render_strobe(float detected_hz, const char *note) {
         cents    = 1200.0f * log2f(detected_hz / s_ref_hz);
     }
 
-    s_phase += 2.0f * (float)M_PI * (detected_hz - s_ref_hz) / s_ref_hz * K_SPEED * dt;
+    s_phase -= 2.0f * (float)M_PI * (detected_hz - s_ref_hz) / s_ref_hz * K_SPEED * dt;
     s_phase = fmodf(s_phase, 2.0f * (float)M_PI);
 
     uint16_t col_seg = (fabsf(cents) <= 5.0f) ? 0xE007u : 0xFFFFu;
