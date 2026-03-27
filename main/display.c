@@ -9,36 +9,38 @@
 
 static const char *TAG = "display";
 
-/* Faster atan2 approximation — max error ~0.017 rad (~1 degree).
- * Segment width is 10 degrees so 1-degree error is imperceptible.
- * Roughly 8x faster than atan2f on Xtensa LX6. */
-static inline float fast_atan2f(float y, float x)
-{
-    float ax = fabsf(x), ay = fabsf(y);
-    float a  = (ax > ay) ? ay / ax : ax / ay;
-    float s  = a * a;
-    float r  = a * (1.0f + s * (-0.3258530f + s * 0.0860374f));
-    if (ax < ay) r = (float)M_PI_2 - r;
-    if (x < 0.0f) r = (float)M_PI - r;
-    if (y < 0.0f) r = -r;
-    return r;
-}
+/* ---- Compile-time display mode and orientation --------------------------------- */
+#define STROBE_MODE_ARC_SOLID    0   /* solid white segments */
+#define STROBE_MODE_ARC_CHECKER  1   /* 8x8 checkerboard segments */
+#define STROBE_MODE_RACK         2   /* horizontal rack-style strobe (TODO) */
 
-#define LCD_W       240
-#define LCD_H       320
+#define ORIENT_PORTRAIT          0
+#define ORIENT_LANDSCAPE         1
+
+#define STROBE_MODE   STROBE_MODE_ARC_CHECKER
+#define ORIENTATION   ORIENT_PORTRAIT
+
+/* ---- Display geometry ---------------------------------------------------------- */
+#if ORIENTATION == ORIENT_PORTRAIT
+#  define LCD_W  240
+#  define LCD_H  320
+#else
+#  define LCD_W  320
+#  define LCD_H  240
+#endif
+
 #define CX          (LCD_W / 2)
 #define CY          127
 #define N_SEG       18
 #define R_INNER     60
 #define R_OUTER     114
-#define STRIP_H     8    /* render arc in horizontal strips; buf = RING_W*STRIP_H*2 ≈ 3KB */
+#define STRIP_H     8
 #define CENTS_TO_RPM  0.3f   /* 1 RPM per cent, 30 RPM at 100 cents */
 #define COL_SEG     0xFFFF
 #define COL_BG      0x0000
-#define FILL_RATIO  0.45f     /* fraction of each segment arc that is lit */
+#define FILL_RATIO  0.45f
 
-/* 100-degree arc centred at the top of the circle (-90 degrees in screen coords
- * where y increases downward).  Arc spans from -140 degrees to -40 degrees. */
+/* 100-degree arc centred at the top of the circle */
 #define ARC_MIN_ANGLE  (-7.0f * (float)M_PI / 9.0f)   /* -140 degrees */
 #define ARC_MAX_ANGLE  (-2.0f * (float)M_PI / 9.0f)   /* -40  degrees */
 
@@ -62,10 +64,10 @@ static inline float fast_atan2f(float y, float x)
 #define BAR_W    200
 #define BAR_H    19
 
-/* ---- Minimal 8x8 bitmap font (A-G, #, -) for note name overlay ---------- */
+/* ---- Minimal 8x8 bitmap font (A-G, #, -) -------------------------------------- */
 #define GLYPH_W 8
 #define GLYPH_H 8
-#define NOTE_SCALE 4   /* render at 4x → 32x32 per character */
+#define NOTE_SCALE 4
 
 typedef struct { char c; uint8_t rows[GLYPH_H]; } glyph_t;
 
@@ -97,46 +99,37 @@ static const uint8_t *glyph_lookup(char c) {
     return NULL;
 }
 
-static float     s_phase    = 0.0f;
-static float     s_ref_hz   = 0.0f;   /* hysteresis reference note — see display_render_strobe */
-static int64_t   s_last_t   = 0;
+/* ---- Shared state ------------------------------------------------------------- */
+static float     s_phase  = 0.0f;
+static float     s_ref_hz = 0.0f;
+static int64_t   s_last_t = 0;
+
 static uint16_t *s_ring_buf = NULL;
 static uint16_t *s_bar_buf  = NULL;
 static uint16_t *s_note_buf = NULL;
 
-esp_err_t display_init(void) {
-    s_ring_buf = heap_caps_malloc(RING_W * STRIP_H * sizeof(uint16_t),
-                                  MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-    if (!s_ring_buf) { ESP_LOGE(TAG, "s_ring_buf alloc failed"); abort(); }
+/* ---- State passed from math layer to renderer ---------------------------------- */
+typedef struct {
+    float        phase;
+    float        cents;
+    const char  *note;
+    uint16_t     col_seg;
+} strobe_state_t;
 
-    s_bar_buf = heap_caps_malloc(BAR_W * BAR_H * sizeof(uint16_t),
-                                 MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-    if (!s_bar_buf) { ESP_LOGE(TAG, "s_bar_buf alloc failed"); abort(); }
-
-    s_note_buf = heap_caps_malloc(NOTE_W * NOTE_H * sizeof(uint16_t),
-                                  MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-    if (!s_note_buf) { ESP_LOGE(TAG, "s_note_buf alloc failed"); abort(); }
-
-    ili9341_fill_rect(0, 0, LCD_W, LCD_H, COL_BG);
-    s_last_t = esp_timer_get_time();
-    return ESP_OK;
-}
+/* ---- Shared sub-renderers (used by all modes) ---------------------------------- */
 
 static void render_bar(float cents) {
     int fill_w = (int)((fabsf(cents) / 50.0f) * 100.0f);
     if (fill_w > 100) fill_w = 100;
     int fill_x = (cents < 0.0f) ? (120 - fill_w) : 120;
-    /* Colors byte-swapped vs fill_rect: draw_bitmap sends uint16_t little-endian */
     uint16_t fill_col = (fabsf(cents) <= 5.0f) ? 0xE007u : 0x20FDu;
 
     memset(s_bar_buf, 0, BAR_W * BAR_H * sizeof(uint16_t));
 
-    /* Groove: screen y=280-287 → local rows 6-13, all columns */
     for (int row = 6; row <= 13; row++)
         for (int col = 0; col < BAR_W; col++)
             s_bar_buf[row * BAR_W + col] = 0x8210u;
 
-    /* Meter fill over groove */
     if (fill_w > 0) {
         int lx0 = fill_x - BAR_X0;
         int lx1 = lx0 + fill_w;
@@ -147,7 +140,6 @@ static void render_bar(float cents) {
                 s_bar_buf[row * BAR_W + col] = fill_col;
     }
 
-    /* Center tick: screen y=276-291 → local rows 2-17, screen x=119-121 → local cols 99-101 */
     for (int row = 2; row <= 17; row++)
         for (int col = 99; col <= 101; col++)
             s_bar_buf[row * BAR_W + col] = 0xFFFFu;
@@ -155,8 +147,6 @@ static void render_bar(float cents) {
     ili9341_draw_bitmap(BAR_X0, BAR_Y0, BAR_W, BAR_H, s_bar_buf);
 }
 
-/* Render note name (e.g. "A#4") into s_note_buf and blit below the arc.
- * Letter glyphs at NOTE_SCALE (4x), octave digit as superscript at NOTE_SCALE/2 (2x). */
 static void render_note(const char *ref_note) {
     int nlen = (int)strlen(ref_note);
     const uint8_t *glyphs[4] = {NULL, NULL, NULL, NULL};
@@ -165,7 +155,6 @@ static void render_note(const char *ref_note) {
     int n_ltr  = nlen - n_dig;
     int ltr_w  = n_ltr * GLYPH_W * NOTE_SCALE;
     int dig_w  = n_dig * GLYPH_W * (NOTE_SCALE / 2);
-    /* Centre text within the buffer */
     int txt_lx  = (NOTE_W - (ltr_w + dig_w)) / 2;
     int txt_ly  = (NOTE_H - GLYPH_H * NOTE_SCALE) / 2;
     int ltr_lx1 = txt_lx + ltr_w;
@@ -174,7 +163,6 @@ static void render_note(const char *ref_note) {
 
     for (int ly = txt_ly; ly < txt_ly + GLYPH_H * NOTE_SCALE && ly < NOTE_H; ly++) {
         int row_in_glyph = (ly - txt_ly) / NOTE_SCALE;
-        /* Letter glyphs */
         for (int lx = txt_lx; lx < ltr_lx1 && lx < NOTE_W; lx++) {
             int ci   = (lx - txt_lx) / (GLYPH_W * NOTE_SCALE);
             int gcol = ((lx - txt_lx) % (GLYPH_W * NOTE_SCALE)) / NOTE_SCALE;
@@ -182,7 +170,6 @@ static void render_note(const char *ref_note) {
             if (bmp && (bmp[row_in_glyph] & (0x80 >> gcol)))
                 s_note_buf[ly * NOTE_W + lx] = COL_SEG;
         }
-        /* Octave digit: superscript at half scale */
         if (n_dig) {
             int dig_row = (ly - txt_ly) / (NOTE_SCALE / 2);
             if (dig_row < GLYPH_H) {
@@ -199,55 +186,13 @@ static void render_note(const char *ref_note) {
     ili9341_draw_bitmap(NOTE_X0, NOTE_Y0, NOTE_W, NOTE_H, s_note_buf);
 }
 
-void display_render_strobe(float detected_hz, const char *note) {
-    int64_t now = esp_timer_get_time();
-    float dt = (s_last_t == 0) ? 0.033f : (float)(now - s_last_t) / 1e6f;
-    if (dt > 0.1f) dt = 0.1f;
-    s_last_t = now;
+/* ---- Renderers ----------------------------------------------------------------- */
 
-    if (detected_hz <= 0.0f) {
-        s_ref_hz = 0.0f;
-        memset(s_ring_buf, 0, RING_W * STRIP_H * sizeof(uint16_t));
-        for (int sy = RING_Y0; sy < RING_Y0 + RING_H; sy += STRIP_H) {
-            int rows = sy + STRIP_H <= RING_Y0 + RING_H ? STRIP_H : (RING_Y0 + RING_H - sy);
-            ili9341_draw_bitmap(RING_X0, sy, RING_W, rows, s_ring_buf);
-        }
-        memset(s_note_buf, 0, NOTE_W * NOTE_H * sizeof(uint16_t));
-        ili9341_draw_bitmap(NOTE_X0, NOTE_Y0, NOTE_W, NOTE_H, s_note_buf);
-        render_bar(0.0f);
-        return;
-    }
-
-    /* Hysteresis reference: snap to nearest note only when deviation exceeds 65 cents.
-     * Both label and rotation use s_ref_hz so they always agree — when the label
-     * changes note, the rotation direction changes with it. */
-    float nearest_hz = pitch_hz_to_nearest_hz(detected_hz);
-    if (s_ref_hz <= 0.0f)
-        s_ref_hz = nearest_hz;
-    if (fabsf(1200.0f * log2f(detected_hz / s_ref_hz)) > 65.0f)
-        s_ref_hz = nearest_hz;
-
-    float cents = 1200.0f * log2f(detected_hz / s_ref_hz);
-
-    /* Rotation speed maps linearly from cents: 1 RPM per cent, 30 RPM at 100 cents.
-     * RPM = |cents| * 0.3  →  dphi/frame = RPM * 2π / (60 * fps)
-     * Sign from cents (positive = sharp = forward, negative = flat = backward). */
-    float rpm = cents * 0.3f;                          /* signed: ±30 RPM at ±100 cents */
-    float dphi = rpm * 2.0f * (float)M_PI * dt / 60.0f;
-    s_phase += dphi;
-    s_phase = fmodf(s_phase, 2.0f * (float)M_PI);
-
-    uint16_t col_seg = (fabsf(cents) <= 5.0f) ? 0xE007u : 0xFFFFu;
-
+static void render_arc(const strobe_state_t *s, int checker) {
     const float seg_span = 2.0f * (float)M_PI / N_SEG;
     const float lit_span = seg_span * FILL_RATIO;
     const float r_inner2 = (float)(R_INNER * R_INNER);
     const float r_outer2 = (float)(R_OUTER * R_OUTER);
-
-    /* Note text derived from hysteresis reference so label always matches
-     * the rotation direction (both use s_ref_hz as the reference note). */
-    char ref_note[4];
-    pitch_hz_to_note(s_ref_hz, ref_note, sizeof(ref_note));
 
     for (int sy = RING_Y0; sy < RING_Y0 + RING_H; sy += STRIP_H) {
         int ey = sy + STRIP_H - 1;
@@ -270,22 +215,100 @@ void display_render_strobe(float detected_hz, const char *note) {
 
             for (int x = x0; x <= x1; x++) {
                 float dx = (float)(x - CX);
-                float d2  = dx * dx + dy * dy;
+                float d2 = dx * dx + dy * dy;
                 if (d2 > r_outer2 || d2 < r_inner2) continue;
 
                 float angle = atan2f(dy, dx);
                 if (angle < ARC_MIN_ANGLE || angle > ARC_MAX_ANGLE) continue;
 
-                float rel = fmodf(angle - s_phase, seg_span);
+                float rel = fmodf(angle - s->phase, seg_span);
                 if (rel < 0.0f) rel += seg_span;
-                if (rel < lit_span && (((x >> 3) + (y >> 3)) & 1) == 0)
-                    s_ring_buf[(y - sy) * RING_W + (x - RING_X0)] = col_seg;
+                if (rel < lit_span) {
+                    if (!checker || (((x >> 3) + (y >> 3)) & 1) == 0)
+                        s_ring_buf[(y - sy) * RING_W + (x - RING_X0)] = s->col_seg;
+                }
             }
         }
 
         ili9341_draw_bitmap(RING_X0, sy, RING_W, rows, s_ring_buf);
     }
 
-    render_note(ref_note);
-    render_bar(cents);
+    render_note(s->note);
+    render_bar(s->cents);
+}
+
+static void render_mode(const strobe_state_t *s) {
+#if STROBE_MODE == STROBE_MODE_ARC_SOLID
+    render_arc(s, 0);
+#elif STROBE_MODE == STROBE_MODE_ARC_CHECKER
+    render_arc(s, 1);
+#else
+    render_arc(s, 1);  /* fallback until other modes are implemented */
+#endif
+}
+
+/* ---- Public API --------------------------------------------------------------- */
+
+esp_err_t display_init(void) {
+    s_ring_buf = heap_caps_malloc(RING_W * STRIP_H * sizeof(uint16_t),
+                                  MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    if (!s_ring_buf) { ESP_LOGE(TAG, "s_ring_buf alloc failed"); abort(); }
+
+    s_bar_buf = heap_caps_malloc(BAR_W * BAR_H * sizeof(uint16_t),
+                                 MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    if (!s_bar_buf) { ESP_LOGE(TAG, "s_bar_buf alloc failed"); abort(); }
+
+    s_note_buf = heap_caps_malloc(NOTE_W * NOTE_H * sizeof(uint16_t),
+                                  MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    if (!s_note_buf) { ESP_LOGE(TAG, "s_note_buf alloc failed"); abort(); }
+
+    ili9341_fill_rect(0, 0, LCD_W, LCD_H, COL_BG);
+    s_last_t = esp_timer_get_time();
+    return ESP_OK;
+}
+
+void display_render_strobe(float detected_hz, const char *note) {
+    int64_t now = esp_timer_get_time();
+    float dt = (s_last_t == 0) ? 0.033f : (float)(now - s_last_t) / 1e6f;
+    if (dt > 0.1f) dt = 0.1f;
+    s_last_t = now;
+
+    if (detected_hz <= 0.0f) {
+        s_ref_hz = 0.0f;
+        memset(s_ring_buf, 0, RING_W * STRIP_H * sizeof(uint16_t));
+        for (int sy = RING_Y0; sy < RING_Y0 + RING_H; sy += STRIP_H) {
+            int rows = sy + STRIP_H <= RING_Y0 + RING_H ? STRIP_H : (RING_Y0 + RING_H - sy);
+            ili9341_draw_bitmap(RING_X0, sy, RING_W, rows, s_ring_buf);
+        }
+        memset(s_note_buf, 0, NOTE_W * NOTE_H * sizeof(uint16_t));
+        ili9341_draw_bitmap(NOTE_X0, NOTE_Y0, NOTE_W, NOTE_H, s_note_buf);
+        render_bar(0.0f);
+        return;
+    }
+
+    /* Hysteresis: snap reference note only when deviation exceeds 65 cents */
+    float nearest_hz = pitch_hz_to_nearest_hz(detected_hz);
+    if (s_ref_hz <= 0.0f) s_ref_hz = nearest_hz;
+    if (fabsf(1200.0f * log2f(detected_hz / s_ref_hz)) > 65.0f)
+        s_ref_hz = nearest_hz;
+
+    float cents = 1200.0f * log2f(detected_hz / s_ref_hz);
+
+    /* Phase: 1 RPM per cent, 30 RPM at 100 cents */
+    float rpm  = cents * CENTS_TO_RPM;
+    float dphi = rpm * 2.0f * (float)M_PI * dt / 60.0f;
+    s_phase += dphi;
+    s_phase = fmodf(s_phase, 2.0f * (float)M_PI);
+
+    char ref_note[4];
+    pitch_hz_to_note(s_ref_hz, ref_note, sizeof(ref_note));
+
+    strobe_state_t state = {
+        .phase   = s_phase,
+        .cents   = cents,
+        .note    = ref_note,
+        .col_seg = (fabsf(cents) <= 5.0f) ? 0xE007u : 0xFFFFu,
+    };
+
+    render_mode(&state);
 }
