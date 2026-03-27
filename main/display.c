@@ -27,36 +27,35 @@ static inline float fast_atan2f(float y, float x)
 #define LCD_W       240
 #define LCD_H       320
 #define CX          (LCD_W / 2)
-#define CY          120
+#define CY          127
 #define N_SEG       18
 #define R_INNER     60
-#define R_OUTER     100
+#define R_OUTER     114
 #define STRIP_H     8    /* render arc in horizontal strips; buf = RING_W*STRIP_H*2 ≈ 3KB */
 #define K_SPEED     20.0f
 #define COL_SEG     0xFFFF
 #define COL_BG      0x0000
 #define FILL_RATIO  0.45f     /* fraction of each segment arc that is lit */
 
-/* 120-degree arc centred at the top of the circle (-90 degrees / -pi/2 in
- * fast_atan2f convention where y increases downward on screen).
- * Arc spans from -150 degrees to -30 degrees. */
-#define ARC_MIN_ANGLE  (-5.0f * (float)M_PI / 6.0f)   /* -150 degrees */
-#define ARC_MAX_ANGLE  (-1.0f * (float)M_PI / 6.0f)   /* -30  degrees */
+/* 100-degree arc centred at the top of the circle (-90 degrees in screen coords
+ * where y increases downward).  Arc spans from -140 degrees to -40 degrees. */
+#define ARC_MIN_ANGLE  (-7.0f * (float)M_PI / 9.0f)   /* -140 degrees */
+#define ARC_MAX_ANGLE  (-2.0f * (float)M_PI / 9.0f)   /* -40  degrees */
 
 /* Bounding box for the arc region.
- * Arc centre is at (CX, CY) = (120, 120).  Arc pixels occupy:
- *   y: [CY - R_OUTER, CY - R_INNER*sin(30)] = [20, 90]
- * Add 5-pixel bottom margin → RING_H = R_OUTER - R_INNER/2 + 5 = 75. */
+ * Arc centre is at (CX, CY) = (120, 127).
+ * RING_Y0 = CY - R_OUTER = 127 - 114 = 13.
+ * Bottom edge = CY - R_INNER*sin(40°) ≈ 127 - 60*0.643 = 88, +5 margin → RING_H = 81. */
 #define RING_X0  (CX - R_OUTER)
 #define RING_Y0  (CY - R_OUTER)
 #define RING_W   (R_OUTER * 2 + 1)
-#define RING_H   (R_OUTER - R_INNER / 2 + 5)
+#define RING_H   81
 
 /* Note name rendered below the arc */
 #define NOTE_W   100
 #define NOTE_H   36
 #define NOTE_X0  (CX - NOTE_W / 2)
-#define NOTE_Y0  108
+#define NOTE_Y0  104
 
 #define BAR_X0   20
 #define BAR_Y0   274
