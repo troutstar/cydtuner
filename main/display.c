@@ -32,7 +32,7 @@ static inline float fast_atan2f(float y, float x)
 #define R_INNER     60
 #define R_OUTER     114
 #define STRIP_H     8    /* render arc in horizontal strips; buf = RING_W*STRIP_H*2 ≈ 3KB */
-#define K_SPEED     20.0f
+#define K_SPEED     5.0f
 #define COL_SEG     0xFFFF
 #define COL_BG      0x0000
 #define FILL_RATIO  0.45f     /* fraction of each segment arc that is lit */
@@ -235,7 +235,7 @@ void display_render_strobe(float detected_hz, const char *note) {
      * visible with no wraparound, so motion direction becomes ambiguous at Nyquist and
      * the pattern appears to shake.  π/(2*N_SEG) keeps direction unambiguous at all speeds. */
     float dphi = 2.0f * (float)M_PI * (detected_hz - s_ref_hz) / s_ref_hz * K_SPEED * dt;
-    const float max_dphi = (float)M_PI / (10.0f * (float)N_SEG);
+    const float max_dphi = (float)M_PI / (3.0f * (float)N_SEG);
     if (dphi >  max_dphi) dphi =  max_dphi;
     if (dphi < -max_dphi) dphi = -max_dphi;
     s_phase += dphi;
