@@ -13,12 +13,14 @@ static const char *TAG = "display";
 #define STROBE_MODE_ARC_SOLID    0   /* solid white arc segments */
 #define STROBE_MODE_ARC_CHECKER  1   /* 8x8 checkerboard arc segments */
 #define STROBE_MODE_RACK         2   /* horizontal rack-style scrolling strobe */
-#define STROBE_MODE_MOIRE        3   /* two overlapping grids, moire interference */
+#define STROBE_MODE_MOIRE        3   /* two overlapping vertical-line grids */
+#define STROBE_MODE_MOIRE_CIRCLES 4  /* two overlapping concentric-circle grids */
+#define STROBE_MODE_MOIRE_SPIRAL  5  /* two overlapping Archimedean spirals, one rotates */
 
 #define ORIENT_PORTRAIT          0
 #define ORIENT_LANDSCAPE         1
 
-#define STROBE_MODE   STROBE_MODE_MOIRE
+#define STROBE_MODE   STROBE_MODE_RACK
 #define ORIENTATION   ORIENT_LANDSCAPE
 
 /* ---- Display geometry ---------------------------------------------------------- */
@@ -83,6 +85,7 @@ static const char *TAG = "display";
 #define GLYPH_W    8
 #define GLYPH_H    8
 #define NOTE_SCALE 8
+#define DIG_SCALE  3   /* superscript octave digit — smaller, top-right of main letter */
 
 typedef struct { char c; uint8_t rows[GLYPH_H]; } glyph_t;
 
@@ -92,8 +95,8 @@ static const glyph_t s_glyphs[] = {
     {'C', {0x3C,0x66,0x60,0x60,0x60,0x66,0x3C,0x00}},
     {'D', {0x78,0x6C,0x66,0x66,0x66,0x6C,0x78,0x00}},
     {'E', {0x7E,0x60,0x60,0x7C,0x60,0x60,0x7E,0x00}},
-    {'F', {0x7E,0x60,0x60,0x7C,0x60,0x60,0x60,0x00}},
-    {'G', {0x3C,0x66,0x60,0x6E,0x66,0x66,0x3E,0x00}},
+    {'F', {0xFE,0xC0,0xC0,0xFC,0xC0,0xC0,0xC0,0x00}},
+    {'G', {0x7C,0xC0,0xC0,0xCF,0xC3,0xC3,0x7E,0x00}},
     {'#', {0x24,0x24,0x7E,0x24,0x7E,0x24,0x24,0x00}},
     {'-', {0x00,0x00,0x00,0x7E,0x00,0x00,0x00,0x00}},
     {'0', {0x3C,0x66,0x6E,0x76,0x66,0x66,0x3C,0x00}},
@@ -171,8 +174,9 @@ static void fill_note_buf(const char *ref_note, uint16_t color) {
     int n_dig   = (nlen > 0 && ref_note[nlen-1] >= '0' && ref_note[nlen-1] <= '9') ? 1 : 0;
     int n_ltr   = nlen - n_dig;
     int ltr_w   = n_ltr * GLYPH_W * NOTE_SCALE;
-    int dig_w   = n_dig * GLYPH_W * (NOTE_SCALE / 2);
-    int txt_lx  = (NOTE_W - (ltr_w + dig_w)) / 2;
+    int dig_w   = n_dig * GLYPH_W * DIG_SCALE;
+    /* Centre on the main letter only; digit sits top-right as superscript */
+    int txt_lx  = (NOTE_W - ltr_w) / 2;
     int txt_ly  = (NOTE_H - GLYPH_H * NOTE_SCALE) / 2;
     int ltr_lx1 = txt_lx + ltr_w;
 
@@ -187,11 +191,12 @@ static void fill_note_buf(const char *ref_note, uint16_t color) {
             if (bmp && (bmp[row_in_glyph] & (0x80 >> gcol)))
                 s_note_buf[ly * NOTE_W + lx] = color;
         }
+        /* Superscript digit: DIG_SCALE, top-aligned with main letter */
         if (n_dig) {
-            int dig_row = (ly - txt_ly) / (NOTE_SCALE / 2);
+            int dig_row = (ly - txt_ly) / DIG_SCALE;
             if (dig_row < GLYPH_H) {
                 for (int lx = ltr_lx1; lx < ltr_lx1 + dig_w && lx < NOTE_W; lx++) {
-                    int gcol = ((lx - ltr_lx1) % (GLYPH_W * (NOTE_SCALE / 2))) / (NOTE_SCALE / 2);
+                    int gcol = ((lx - ltr_lx1) % (GLYPH_W * DIG_SCALE)) / DIG_SCALE;
                     const uint8_t *bmp = glyphs[n_ltr];
                     if (bmp && (bmp[dig_row] & (0x80 >> gcol)))
                         s_note_buf[ly * NOTE_W + lx] = color;
@@ -290,32 +295,9 @@ static void render_rack(const strobe_state_t *s) {
     }
 
     render_note_at(s->note, RACK_NOTE_Y0);
-    render_bar(s->cents);
 }
 
-static void render_moire(const strobe_state_t *s) {
-    float phase_px = s->phase * (float)MOIRE_P2 * (float)N_SEG * MOIRE_SPEED
-                     / (2.0f * (float)M_PI);
-    int offset = (int)phase_px;
-
-    /* Top zone: moire pattern */
-    for (int sy = 0; sy < MOIRE_H; sy += STRIP_H) {
-        int ey = sy + STRIP_H - 1;
-        if (ey >= MOIRE_H) ey = MOIRE_H - 1;
-        int rows = ey - sy + 1;
-
-        for (int y = sy; y <= ey; y++) {
-            for (int x = 0; x < LCD_W; x++) {
-                int g1 = (x % MOIRE_P1) < MOIRE_LINE_W;
-                int g2 = ((x + offset) % MOIRE_P2 + MOIRE_P2) % MOIRE_P2 < MOIRE_LINE_W;
-                s_ring_buf[(y - sy) * LCD_W + x] = (g1 ^ g2) ? COL_SEG : COL_BG;
-            }
-        }
-
-        ili9341_draw_bitmap(0, sy, LCD_W, rows, s_ring_buf);
-    }
-
-    /* Bottom zone: black background, note label white or green when in tune */
+static void render_moire_note_zone(const strobe_state_t *s) {
     uint16_t note_col = (fabsf(s->cents) <= 3.0f) ? 0xE007u : 0xFFFFu;
     fill_note_buf(s->note, note_col);
     const int ny0 = MOIRE_NOTE_Y0;
@@ -341,6 +323,100 @@ static void render_moire(const strobe_state_t *s) {
     }
 }
 
+static void render_moire(const strobe_state_t *s) {
+    float phase_px = s->phase * (float)MOIRE_P2 * (float)N_SEG * MOIRE_SPEED
+                     / (2.0f * (float)M_PI);
+    int offset = (int)phase_px;
+
+    /* Top zone: moire pattern */
+    for (int sy = 0; sy < MOIRE_H; sy += STRIP_H) {
+        int ey = sy + STRIP_H - 1;
+        if (ey >= MOIRE_H) ey = MOIRE_H - 1;
+        int rows = ey - sy + 1;
+
+        for (int y = sy; y <= ey; y++) {
+            for (int x = 0; x < LCD_W; x++) {
+                int g1 = (x % MOIRE_P1) < MOIRE_LINE_W;
+                int g2 = ((x + offset) % MOIRE_P2 + MOIRE_P2) % MOIRE_P2 < MOIRE_LINE_W;
+                s_ring_buf[(y - sy) * LCD_W + x] = (g1 ^ g2) ? COL_SEG : COL_BG;
+            }
+        }
+
+        ili9341_draw_bitmap(0, sy, LCD_W, rows, s_ring_buf);
+    }
+
+    render_moire_note_zone(s);
+}
+
+static void render_moire_circles(const strobe_state_t *s) {
+    /* Concentric circles: Grid 1 static, Grid 2 radially offset with phase.
+     * Different ring periods create expanding/contracting moire rings. */
+    float phase_offset = s->phase * (float)MOIRE_P2 * (float)N_SEG * MOIRE_SPEED
+                         / (2.0f * (float)M_PI);
+    int offset = (int)phase_offset;
+
+    const int cx = LCD_W / 2;
+    const int cy = MOIRE_H / 2;
+
+    for (int sy = 0; sy < MOIRE_H; sy += STRIP_H) {
+        int ey = sy + STRIP_H - 1;
+        if (ey >= MOIRE_H) ey = MOIRE_H - 1;
+        int rows = ey - sy + 1;
+
+        for (int y = sy; y <= ey; y++) {
+            float dy = (float)(y - cy);
+            for (int x = 0; x < LCD_W; x++) {
+                float dx = (float)(x - cx);
+                int r = (int)sqrtf(dx * dx + dy * dy);
+                int g1 = r % MOIRE_P1 < MOIRE_LINE_W;
+                int g2 = (r + offset) % MOIRE_P2 < MOIRE_LINE_W;
+                s_ring_buf[(y - sy) * LCD_W + x] = (g1 ^ g2) ? COL_SEG : COL_BG;
+            }
+        }
+
+        ili9341_draw_bitmap(0, sy, LCD_W, rows, s_ring_buf);
+    }
+
+    render_moire_note_zone(s);
+}
+
+static void render_moire_spiral(const strobe_state_t *s) {
+    /* Two Archimedean spirals with slightly different pitches (MOIRE_P1, MOIRE_P2).
+     * Spiral offset scrolls at the same rate as the line/circle moire modes.
+     * Different pitches guarantee visible interference bands at all phase values. */
+    float spiral_off = s->phase * (float)MOIRE_P2 * (float)N_SEG * MOIRE_SPEED
+                       / (2.0f * (float)M_PI);
+    const float K1  = (float)MOIRE_P1 / (2.0f * (float)M_PI);
+    const float K2  = (float)MOIRE_P2 / (2.0f * (float)M_PI);
+    const float PAD = 100.0f * (float)MOIRE_P2;
+    const int   cx  = LCD_W / 2;
+    const int   cy  = MOIRE_H / 2;
+
+    for (int sy = 0; sy < MOIRE_H; sy += STRIP_H) {
+        int ey = sy + STRIP_H - 1;
+        if (ey >= MOIRE_H) ey = MOIRE_H - 1;
+        int rows = ey - sy + 1;
+
+        for (int y = sy; y <= ey; y++) {
+            float dy = (float)(y - cy);
+            for (int x = 0; x < LCD_W; x++) {
+                float dx    = (float)(x - cx);
+                float r     = sqrtf(dx * dx + dy * dy);
+                float theta = atan2f(dy, dx);
+
+                int g1 = (int)fmodf(r - K1 * theta + PAD,           (float)MOIRE_P1) < MOIRE_LINE_W;
+                int g2 = (int)fmodf(r - K2 * theta + spiral_off + PAD, (float)MOIRE_P2) < MOIRE_LINE_W;
+
+                s_ring_buf[(y - sy) * LCD_W + x] = (g1 ^ g2) ? COL_SEG : COL_BG;
+            }
+        }
+
+        ili9341_draw_bitmap(0, sy, LCD_W, rows, s_ring_buf);
+    }
+
+    render_moire_note_zone(s);
+}
+
 static void render_mode(const strobe_state_t *s) {
 #if STROBE_MODE == STROBE_MODE_ARC_SOLID
     render_arc(s, 0);
@@ -350,11 +426,15 @@ static void render_mode(const strobe_state_t *s) {
     render_rack(s);
 #elif STROBE_MODE == STROBE_MODE_MOIRE
     render_moire(s);
+#elif STROBE_MODE == STROBE_MODE_MOIRE_CIRCLES
+    render_moire_circles(s);
+#elif STROBE_MODE == STROBE_MODE_MOIRE_SPIRAL
+    render_moire_spiral(s);
 #endif
 }
 
 static void clear_strobe_region(void) {
-#if STROBE_MODE == STROBE_MODE_MOIRE
+#if STROBE_MODE == STROBE_MODE_MOIRE || STROBE_MODE == STROBE_MODE_MOIRE_CIRCLES || STROBE_MODE == STROBE_MODE_MOIRE_SPIRAL
     memset(s_ring_buf, 0, LCD_W * STRIP_H * sizeof(uint16_t));
     for (int sy = 0; sy < LCD_H; sy += STRIP_H) {
         int rows = (sy + STRIP_H <= LCD_H) ? STRIP_H : (LCD_H - sy);
@@ -413,7 +493,7 @@ void display_render_strobe(float detected_hz, const char *note) {
     if (detected_hz <= 0.0f) {
         s_ref_hz = 0.0f;
         clear_strobe_region();
-#if STROBE_MODE != STROBE_MODE_MOIRE
+#if STROBE_MODE == STROBE_MODE_ARC_SOLID || STROBE_MODE == STROBE_MODE_ARC_CHECKER
         render_bar(0.0f);
 #endif
         return;
