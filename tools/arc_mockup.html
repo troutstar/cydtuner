@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Strobe Arc Mockup</title>
+<style>
+  body { background:#1a1a1a; color:#ccc; font-family:monospace; display:flex; gap:20px; padding:20px; }
+  canvas { border:1px solid #444; image-rendering:pixelated; width:480px; height:640px; flex-shrink:0; }
+  #controls { display:flex; flex-direction:column; gap:12px; min-width:260px; }
+  label { display:flex; flex-direction:column; gap:4px; font-size:13px; }
+  input[type=range] { width:100%; }
+  .val { color:#fff; font-weight:bold; }
+  h2 { margin:0 0 8px; color:#fff; font-size:15px; }
+  .group { background:#252525; border-radius:6px; padding:12px; }
+</style>
+</head>
+<body>
+
+<canvas id="c" width="240" height="320"></canvas>
+
+<div id="controls">
+  <div class="group">
+    <h2>Arc geometry</h2>
+    <label>Arc span: <span class="val" id="vSpan">120</span>°
+      <input type="range" id="span" min="60" max="200" value="120">
+    </label>
+    <label>CY (circle centre y): <span class="val" id="vCy">120</span>
+      <input type="range" id="cy" min="40" max="200" value="120">
+    </label>
+    <label>R outer: <span class="val" id="vRo">100</span>
+      <input type="range" id="ro" min="60" max="140" value="100">
+    </label>
+    <label>R inner: <span class="val" id="vRi">60</span>
+      <input type="range" id="ri" min="20" max="100" value="60">
+    </label>
+  </div>
+  <div class="group">
+    <h2>Segment style</h2>
+    <label>N segments: <span class="val" id="vNseg">18</span>
+      <input type="range" id="nseg" min="6" max="48" value="18">
+    </label>
+    <label>Fill ratio: <span class="val" id="vFill">0.45</span>
+      <input type="range" id="fill" min="0.05" max="0.95" step="0.05" value="0.45">
+    </label>
+  </div>
+  <div class="group">
+    <h2>Animation</h2>
+    <label>Phase speed: <span class="val" id="vSpeed">1.0</span>x
+      <input type="range" id="speed" min="-3" max="3" step="0.1" value="1.0">
+    </label>
+    <button id="btnStop" style="margin-top:6px;padding:4px 10px;cursor:pointer">Pause</button>
+  </div>
+  <div class="group" style="font-size:12px; line-height:1.7; color:#aaa;">
+    <b style="color:#fff">Current code values</b><br>
+    ARC_MIN: <span id="outMin"></span>°<br>
+    ARC_MAX: <span id="outMax"></span>°<br>
+    RING_Y0: <span id="outY0"></span><br>
+    RING_H:  <span id="outH"></span><br>
+    NOTE_Y0 (approx): <span id="outNote"></span>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+const LCD_W  = 240, LCD_H = 320;
+const CX     = 120;
+
+let phase = 0.3;
+let animId = null;
+let running = true;
+
+function get(id)  { return parseFloat(document.getElementById(id).value); }
+function val(id, v) { document.getElementById(id).textContent = v; }
+
+function draw() {
+  const span   = get('span');
+  const cy     = get('cy');
+  const ro     = get('ro');
+  const ri     = get('ri');
+  const nseg   = get('nseg');
+  const fill   = get('fill');
+  const speed  = get('speed');
+
+  const halfDeg   = span / 2;
+  const arcMinRad = (-90 - halfDeg / 2) * Math.PI / 180;
+  const arcMaxRad = (-90 + halfDeg / 2) * Math.PI / 180;
+  const segSpan   = 2 * Math.PI / nseg;
+  const litSpan   = segSpan * fill;
+  const ro2       = ro * ro;
+  const ri2       = ri * ri;
+
+  // update info panel
+  val('vSpan',  span);
+  val('vCy',    cy);
+  val('vRo',    ro);
+  val('vRi',    ri);
+  val('vNseg',  nseg);
+  val('vFill',  fill.toFixed(2));
+  val('vSpeed', speed.toFixed(1));
+  val('outMin', (-90 - halfDeg/2).toFixed(0));
+  val('outMax', (-90 + halfDeg/2).toFixed(0));
+  const ringY0 = cy - ro;
+  val('outY0',  ringY0.toFixed(0));
+  // inner endpoint y = cy + ri*sin(arcMaxRad), ring_h = that - ringY0 + 5
+  const innerEndY = cy + ri * Math.sin(arcMaxRad);
+  val('outH',   Math.max(0, Math.ceil(innerEndY - ringY0 + 5)));
+  val('outNote', Math.ceil(innerEndY + 15));
+
+  // render
+  const img = ctx.createImageData(LCD_W, LCD_H);
+  const d   = img.data;
+
+  for (let y = 0; y < LCD_H; y++) {
+    const dy = y - cy;
+    for (let x = 0; x < LCD_W; x++) {
+      const dx = x - CX;
+      const d2 = dx*dx + dy*dy;
+      if (d2 < ri2 || d2 > ro2) continue;
+
+      const angle = Math.atan2(dy, dx);
+      if (angle < arcMinRad || angle > arcMaxRad) continue;
+
+      let rel = (angle - phase) % segSpan;
+      if (rel < 0) rel += segSpan;
+
+      if (rel < litSpan) {
+        const i = (y * LCD_W + x) * 4;
+        d[i]   = 255;
+        d[i+1] = 255;
+        d[i+2] = 255;
+        d[i+3] = 255;
+      }
+    }
+  }
+
+  ctx.putImageData(img, 0, 0);
+
+  // note label
+  const noteY = Math.ceil(innerEndY + 15);
+  ctx.fillStyle = '#fff';
+  ctx.font = '14px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('A4', CX, noteY + 14);
+
+  // bar
+  const barY = 274;
+  ctx.fillStyle = '#333';
+  ctx.fillRect(20, barY, 200, 8);
+  ctx.fillStyle = '#00cc44';
+  ctx.fillRect(20, barY, 100, 8);
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(119, barY - 4, 2, 16);
+}
+
+function loop() {
+  const speed = get('speed');
+  phase += speed * 0.012;
+  draw();
+  animId = requestAnimationFrame(loop);
+}
+
+// wire controls
+['span','cy','ro','ri','nseg','fill','speed'].forEach(id => {
+  document.getElementById(id).addEventListener('input', () => { if (!running) draw(); });
+});
+
+document.getElementById('btnStop').addEventListener('click', () => {
+  running = !running;
+  document.getElementById('btnStop').textContent = running ? 'Pause' : 'Resume';
+  if (running) loop(); else cancelAnimationFrame(animId);
+});
+
+loop();
+</script>
+</body>
+</html>

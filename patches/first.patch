@@ -1,0 +1,4 @@
+git apply display-arc.patch
+git add main/display.c
+git commit -m "Replace full-circle strobe with 120-degree arc in top half"
+git push -u origin claude/update-animation-arc-6SSK9

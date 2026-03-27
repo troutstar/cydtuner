@@ -1,0 +1,194 @@
+diff --git a/main/display.c b/main/display.c
+index 9b95574..c780482 100644
+--- a/main/display.c
++++ b/main/display.c
+@@ -31,20 +31,33 @@ static inline float fast_atan2f(float y, float x)
+ #define N_SEG       36
+ #define R_INNER     60
+ #define R_OUTER     100
+-#define STRIP_H     8    /* render ring in horizontal strips; buf = RING_W*STRIP_H*2 ≈ 3KB */
++#define STRIP_H     8    /* render arc in horizontal strips; buf = RING_W*STRIP_H*2 ≈ 3KB */
+ #define K_SPEED     20.0f
+ #define COL_SEG     0xFFFF
+ #define COL_BG      0x0000
+ #define FILL_RATIO  0.22f     /* fraction of each segment arc that is lit */
+ 
+-/* Bounding boxes for partial-region blits.
+- * RING: X0 = CX - R_OUTER, Y0 = CY - R_OUTER, W/H = R_OUTER * 2 + 1
+- * The +1 is required: the render loop is inclusive (y <= CY + R_OUTER),
+- * so local row/col 200 is a valid write — needs a 201-element dimension. */
++/* 120-degree arc centred at the top of the circle (-90 degrees / -pi/2 in
++ * fast_atan2f convention where y increases downward on screen).
++ * Arc spans from -150 degrees to -30 degrees. */
++#define ARC_MIN_ANGLE  (-5.0f * (float)M_PI / 6.0f)   /* -150 degrees */
++#define ARC_MAX_ANGLE  (-1.0f * (float)M_PI / 6.0f)   /* -30  degrees */
++
++/* Bounding box for the arc region.
++ * Arc centre is at (CX, CY) = (120, 160).  Arc pixels occupy:
++ *   y: [CY - R_OUTER, CY - R_INNER*sin(30)] = [60, 130]
++ * Add 5-pixel bottom margin → RING_H = R_OUTER - R_INNER/2 + 5 = 75. */
+ #define RING_X0  (CX - R_OUTER)
+ #define RING_Y0  (CY - R_OUTER)
+ #define RING_W   (R_OUTER * 2 + 1)
+-#define RING_H   (R_OUTER * 2 + 1)
++#define RING_H   (R_OUTER - R_INNER / 2 + 5)
++
++/* Note name rendered below the arc */
++#define NOTE_W   100
++#define NOTE_H   36
++#define NOTE_X0  (CX - NOTE_W / 2)
++#define NOTE_Y0  148
++
+ #define BAR_X0   20
+ #define BAR_Y0   274
+ #define BAR_W    200
+@@ -90,6 +103,7 @@ static float     s_ref_hz   = 0.0f;   /* hysteresis reference note — see displ
+ static int64_t   s_last_t   = 0;
+ static uint16_t *s_ring_buf = NULL;
+ static uint16_t *s_bar_buf  = NULL;
++static uint16_t *s_note_buf = NULL;
+ 
+ esp_err_t display_init(void) {
+     s_ring_buf = heap_caps_malloc(RING_W * STRIP_H * sizeof(uint16_t),
+@@ -100,6 +114,10 @@ esp_err_t display_init(void) {
+                                  MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+     if (!s_bar_buf) { ESP_LOGE(TAG, "s_bar_buf alloc failed"); abort(); }
+ 
++    s_note_buf = heap_caps_malloc(NOTE_W * NOTE_H * sizeof(uint16_t),
++                                  MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
++    if (!s_note_buf) { ESP_LOGE(TAG, "s_note_buf alloc failed"); abort(); }
++
+     ili9341_fill_rect(0, 0, LCD_W, LCD_H, COL_BG);
+     s_last_t = esp_timer_get_time();
+     return ESP_OK;
+@@ -138,6 +156,50 @@ static void render_bar(float cents) {
+     ili9341_draw_bitmap(BAR_X0, BAR_Y0, BAR_W, BAR_H, s_bar_buf);
+ }
+ 
++/* Render note name (e.g. "A#4") into s_note_buf and blit below the arc.
++ * Letter glyphs at NOTE_SCALE (4x), octave digit as superscript at NOTE_SCALE/2 (2x). */
++static void render_note(const char *ref_note) {
++    int nlen = (int)strlen(ref_note);
++    const uint8_t *glyphs[4] = {NULL, NULL, NULL, NULL};
++    for (int i = 0; i < nlen && i < 4; i++) glyphs[i] = glyph_lookup(ref_note[i]);
++    int n_dig  = (nlen > 0 && ref_note[nlen-1] >= '0' && ref_note[nlen-1] <= '9') ? 1 : 0;
++    int n_ltr  = nlen - n_dig;
++    int ltr_w  = n_ltr * GLYPH_W * NOTE_SCALE;
++    int dig_w  = n_dig * GLYPH_W * (NOTE_SCALE / 2);
++    /* Centre text within the buffer */
++    int txt_lx  = (NOTE_W - (ltr_w + dig_w)) / 2;
++    int txt_ly  = (NOTE_H - GLYPH_H * NOTE_SCALE) / 2;
++    int ltr_lx1 = txt_lx + ltr_w;
++
++    memset(s_note_buf, 0, NOTE_W * NOTE_H * sizeof(uint16_t));
++
++    for (int ly = txt_ly; ly < txt_ly + GLYPH_H * NOTE_SCALE && ly < NOTE_H; ly++) {
++        int row_in_glyph = (ly - txt_ly) / NOTE_SCALE;
++        /* Letter glyphs */
++        for (int lx = txt_lx; lx < ltr_lx1 && lx < NOTE_W; lx++) {
++            int ci   = (lx - txt_lx) / (GLYPH_W * NOTE_SCALE);
++            int gcol = ((lx - txt_lx) % (GLYPH_W * NOTE_SCALE)) / NOTE_SCALE;
++            const uint8_t *bmp = (ci < n_ltr) ? glyphs[ci] : NULL;
++            if (bmp && (bmp[row_in_glyph] & (0x80 >> gcol)))
++                s_note_buf[ly * NOTE_W + lx] = COL_SEG;
++        }
++        /* Octave digit: superscript at half scale */
++        if (n_dig) {
++            int dig_row = (ly - txt_ly) / (NOTE_SCALE / 2);
++            if (dig_row < GLYPH_H) {
++                for (int lx = ltr_lx1; lx < ltr_lx1 + dig_w && lx < NOTE_W; lx++) {
++                    int gcol = ((lx - ltr_lx1) % (GLYPH_W * (NOTE_SCALE / 2))) / (NOTE_SCALE / 2);
++                    const uint8_t *bmp = glyphs[n_ltr];
++                    if (bmp && (bmp[dig_row] & (0x80 >> gcol)))
++                        s_note_buf[ly * NOTE_W + lx] = COL_SEG;
++                }
++            }
++        }
++    }
++
++    ili9341_draw_bitmap(NOTE_X0, NOTE_Y0, NOTE_W, NOTE_H, s_note_buf);
++}
++
+ void display_render_strobe(float detected_hz, const char *note) {
+     int64_t now = esp_timer_get_time();
+     float dt = (s_last_t == 0) ? 0.033f : (float)(now - s_last_t) / 1e6f;
+@@ -151,6 +213,8 @@ void display_render_strobe(float detected_hz, const char *note) {
+             int rows = sy + STRIP_H <= RING_Y0 + RING_H ? STRIP_H : (RING_Y0 + RING_H - sy);
+             ili9341_draw_bitmap(RING_X0, sy, RING_W, rows, s_ring_buf);
+         }
++        memset(s_note_buf, 0, NOTE_W * NOTE_H * sizeof(uint16_t));
++        ili9341_draw_bitmap(NOTE_X0, NOTE_Y0, NOTE_W, NOTE_H, s_note_buf);
+         render_bar(0.0f);
+         return;
+     }
+@@ -186,20 +250,6 @@ void display_render_strobe(float detected_hz, const char *note) {
+      * the rotation direction (both use s_ref_hz as the reference note). */
+     char ref_note[4];
+     pitch_hz_to_note(s_ref_hz, ref_note, sizeof(ref_note));
+-    int nlen = (int)strlen(ref_note);
+-    const uint8_t *glyphs[4] = {NULL, NULL, NULL, NULL};
+-    for (int i = 0; i < nlen && i < 4; i++) glyphs[i] = glyph_lookup(ref_note[i]);
+-    /* Octave digit (last char if '0'-'9') renders as superscript at half scale */
+-    int n_dig  = (nlen > 0 && ref_note[nlen-1] >= '0' && ref_note[nlen-1] <= '9') ? 1 : 0;
+-    int n_ltr  = nlen - n_dig;
+-    int ltr_w  = n_ltr * GLYPH_W * NOTE_SCALE;
+-    int dig_w  = n_dig * GLYPH_W * (NOTE_SCALE / 2);
+-    int txt_x0 = CX - (ltr_w + dig_w) / 2;
+-    int txt_y0 = CY - (GLYPH_H * NOTE_SCALE) / 2;
+-    int ltr_x1 = txt_x0 + ltr_w;
+-    int txt_x1 = ltr_x1 + dig_w;
+-    int txt_y1 = txt_y0 + GLYPH_H * NOTE_SCALE;
+-    int dig_y1 = txt_y0 + GLYPH_H * (NOTE_SCALE / 2);  /* superscript: upper half */
+ 
+     for (int sy = RING_Y0; sy < RING_Y0 + RING_H; sy += STRIP_H) {
+         int ey = sy + STRIP_H - 1;
+@@ -223,39 +273,21 @@ void display_render_strobe(float detected_hz, const char *note) {
+             for (int x = x0; x <= x1; x++) {
+                 float dx = (float)(x - CX);
+                 float d2  = dx * dx + dy * dy;
+-                uint16_t col;
+-                if (d2 > r_outer2) {
+-                    col = COL_BG;
+-                } else if (d2 < r_inner2) {
+-                    /* Inner circle: note letters at full scale, octave superscript at half */
+-                    col = COL_BG;
+-                    if (nlen && x >= txt_x0 && x < txt_x1 &&
+-                                y >= txt_y0 && y < txt_y1) {
+-                        if (x < ltr_x1) {
+-                            int ci   = (x - txt_x0) / (GLYPH_W * NOTE_SCALE);
+-                            int gcol = ((x - txt_x0) % (GLYPH_W * NOTE_SCALE)) / NOTE_SCALE;
+-                            int grow = (y - txt_y0) / NOTE_SCALE;
+-                            const uint8_t *bmp = (ci < n_ltr) ? glyphs[ci] : NULL;
+-                            if (bmp && (bmp[grow] & (0x80 >> gcol))) col = COL_SEG;
+-                        } else if (n_dig && y < dig_y1) {
+-                            int gcol = ((x - ltr_x1) % (GLYPH_W * (NOTE_SCALE / 2))) / (NOTE_SCALE / 2);
+-                            int grow = (y - txt_y0) / (NOTE_SCALE / 2);
+-                            const uint8_t *bmp = glyphs[n_ltr];
+-                            if (bmp && (bmp[grow] & (0x80 >> gcol))) col = COL_SEG;
+-                        }
+-                    }
+-                } else {
+-                    float angle = atan2f(dy, dx);
+-                    float rel   = fmodf(angle - s_phase, seg_span);
+-                    if (rel < 0.0f) rel += seg_span;
+-                    col = (rel < lit_span) ? col_seg : COL_BG;
+-                }
+-                s_ring_buf[(y - sy) * RING_W + (x - RING_X0)] = col;
++                if (d2 > r_outer2 || d2 < r_inner2) continue;
++
++                float angle = fast_atan2f(dy, dx);
++                if (angle < ARC_MIN_ANGLE || angle > ARC_MAX_ANGLE) continue;
++
++                float rel = fmodf(angle - s_phase, seg_span);
++                if (rel < 0.0f) rel += seg_span;
++                if (rel < lit_span)
++                    s_ring_buf[(y - sy) * RING_W + (x - RING_X0)] = col_seg;
+             }
+         }
+ 
+         ili9341_draw_bitmap(RING_X0, sy, RING_W, rows, s_ring_buf);
+     }
+ 
++    render_note(ref_note);
+     render_bar(cents);
+ }
