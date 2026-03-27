@@ -278,7 +278,7 @@ void display_render_strobe(float detected_hz, const char *note) {
 
                 float rel = fmodf(angle - s_phase, seg_span);
                 if (rel < 0.0f) rel += seg_span;
-                if (rel < lit_span && ((x + y) & 1) == 0)
+                if (rel < lit_span && (((x >> 1) + (y >> 1)) & 1) == 0)
                     s_ring_buf[(y - sy) * RING_W + (x - RING_X0)] = col_seg;
             }
         }
