@@ -10,15 +10,15 @@
 static const char *TAG = "display";
 
 /* ---- Compile-time display mode and orientation --------------------------------- */
-#define STROBE_MODE_ARC_SOLID    0   /* solid white segments */
-#define STROBE_MODE_ARC_CHECKER  1   /* 8x8 checkerboard segments */
-#define STROBE_MODE_RACK         2   /* horizontal rack-style strobe (TODO) */
+#define STROBE_MODE_ARC_SOLID    0   /* solid white arc segments */
+#define STROBE_MODE_ARC_CHECKER  1   /* 8x8 checkerboard arc segments */
+#define STROBE_MODE_RACK         2   /* horizontal rack-style scrolling strobe */
 
 #define ORIENT_PORTRAIT          0
 #define ORIENT_LANDSCAPE         1
 
-#define STROBE_MODE   STROBE_MODE_ARC_CHECKER
-#define ORIENTATION   ORIENT_PORTRAIT
+#define STROBE_MODE   STROBE_MODE_RACK
+#define ORIENTATION   ORIENT_LANDSCAPE
 
 /* ---- Display geometry ---------------------------------------------------------- */
 #if ORIENTATION == ORIENT_PORTRAIT
@@ -35,38 +35,44 @@ static const char *TAG = "display";
 #define R_INNER     60
 #define R_OUTER     114
 #define STRIP_H     8
-#define CENTS_TO_RPM  0.3f   /* 1 RPM per cent, 30 RPM at 100 cents */
+#define CENTS_TO_RPM  0.3f
 #define COL_SEG     0xFFFF
 #define COL_BG      0x0000
 #define FILL_RATIO  0.45f
 
-/* 100-degree arc centred at the top of the circle */
+/* Arc geometry */
 #define ARC_MIN_ANGLE  (-7.0f * (float)M_PI / 9.0f)   /* -140 degrees */
 #define ARC_MAX_ANGLE  (-2.0f * (float)M_PI / 9.0f)   /* -40  degrees */
-
-/* Bounding box for the arc region.
- * Arc centre is at (CX, CY) = (120, 127).
- * RING_Y0 = CY - R_OUTER = 127 - 114 = 13.
- * Bottom edge = CY - R_INNER*sin(40°) ≈ 127 - 60*0.643 = 88, +5 margin → RING_H = 81. */
 #define RING_X0  (CX - R_OUTER)
 #define RING_Y0  (CY - R_OUTER)
 #define RING_W   (R_OUTER * 2 + 1)
 #define RING_H   81
 
-/* Note name rendered below the arc */
+/* Strip buffer width — wide enough for both arc (RING_W=229) and rack (LCD_W=240) */
+#define STRIP_BUF_W  LCD_W
+
+/* Rack geometry */
+#define RACK_Y0         70    /* top of strobe band */
+#define RACK_H          60    /* height of strobe band */
+#define RACK_SEG_W      20    /* stripe period in pixels */
+#define RACK_NOTE_Y0    150   /* note label below band */
+#define RACK_SPEED      4.0f  /* visual speed multiplier vs arc phase */
+
+/* Arc note position */
 #define NOTE_W   100
 #define NOTE_H   36
 #define NOTE_X0  (CX - NOTE_W / 2)
 #define NOTE_Y0  104
 
-#define BAR_X0   20
-#define BAR_Y0   274
 #define BAR_W    200
 #define BAR_H    19
+#define BAR_X0   ((LCD_W - BAR_W) / 2)   /* centred horizontally */
+#define BAR_Y0   200
+#define BAR_CX   (BAR_X0 + BAR_W / 2)    /* screen x of bar centre */
 
-/* ---- Minimal 8x8 bitmap font (A-G, #, -) -------------------------------------- */
-#define GLYPH_W 8
-#define GLYPH_H 8
+/* ---- Minimal 8x8 bitmap font -------------------------------------------------- */
+#define GLYPH_W    8
+#define GLYPH_H    8
 #define NOTE_SCALE 4
 
 typedef struct { char c; uint8_t rows[GLYPH_H]; } glyph_t;
@@ -116,12 +122,12 @@ typedef struct {
     uint16_t     col_seg;
 } strobe_state_t;
 
-/* ---- Shared sub-renderers (used by all modes) ---------------------------------- */
+/* ---- Shared sub-renderers ----------------------------------------------------- */
 
 static void render_bar(float cents) {
     int fill_w = (int)((fabsf(cents) / 50.0f) * 100.0f);
     if (fill_w > 100) fill_w = 100;
-    int fill_x = (cents < 0.0f) ? (120 - fill_w) : 120;
+    int fill_x = (cents < 0.0f) ? (BAR_CX - fill_w) : BAR_CX;
     uint16_t fill_col = (fabsf(cents) <= 5.0f) ? 0xE007u : 0x20FDu;
 
     memset(s_bar_buf, 0, BAR_W * BAR_H * sizeof(uint16_t));
@@ -147,14 +153,14 @@ static void render_bar(float cents) {
     ili9341_draw_bitmap(BAR_X0, BAR_Y0, BAR_W, BAR_H, s_bar_buf);
 }
 
-static void render_note(const char *ref_note) {
+static void render_note_at(const char *ref_note, int y0) {
     int nlen = (int)strlen(ref_note);
     const uint8_t *glyphs[4] = {NULL, NULL, NULL, NULL};
     for (int i = 0; i < nlen && i < 4; i++) glyphs[i] = glyph_lookup(ref_note[i]);
-    int n_dig  = (nlen > 0 && ref_note[nlen-1] >= '0' && ref_note[nlen-1] <= '9') ? 1 : 0;
-    int n_ltr  = nlen - n_dig;
-    int ltr_w  = n_ltr * GLYPH_W * NOTE_SCALE;
-    int dig_w  = n_dig * GLYPH_W * (NOTE_SCALE / 2);
+    int n_dig   = (nlen > 0 && ref_note[nlen-1] >= '0' && ref_note[nlen-1] <= '9') ? 1 : 0;
+    int n_ltr   = nlen - n_dig;
+    int ltr_w   = n_ltr * GLYPH_W * NOTE_SCALE;
+    int dig_w   = n_dig * GLYPH_W * (NOTE_SCALE / 2);
     int txt_lx  = (NOTE_W - (ltr_w + dig_w)) / 2;
     int txt_ly  = (NOTE_H - GLYPH_H * NOTE_SCALE) / 2;
     int ltr_lx1 = txt_lx + ltr_w;
@@ -183,7 +189,7 @@ static void render_note(const char *ref_note) {
         }
     }
 
-    ili9341_draw_bitmap(NOTE_X0, NOTE_Y0, NOTE_W, NOTE_H, s_note_buf);
+    ili9341_draw_bitmap(NOTE_X0, y0, NOTE_W, NOTE_H, s_note_buf);
 }
 
 /* ---- Renderers ----------------------------------------------------------------- */
@@ -233,7 +239,43 @@ static void render_arc(const strobe_state_t *s, int checker) {
         ili9341_draw_bitmap(RING_X0, sy, RING_W, rows, s_ring_buf);
     }
 
-    render_note(s->note);
+    render_note_at(s->note, NOTE_Y0);
+    render_bar(s->cents);
+}
+
+static void render_rack(const strobe_state_t *s) {
+    /* Convert phase (radians) to pixel scroll offset.
+     * One full 2π cycle = N_SEG stripe periods of RACK_SEG_W pixels each. */
+    float phase_px = s->phase * (float)RACK_SEG_W * (float)N_SEG * RACK_SPEED / (2.0f * (float)M_PI);
+    int offset = (int)phase_px;
+    int lit_w  = (int)(RACK_SEG_W * FILL_RATIO);
+
+    for (int sy = RACK_Y0; sy < RACK_Y0 + RACK_H; sy += STRIP_H) {
+        int ey = sy + STRIP_H - 1;
+        if (ey >= RACK_Y0 + RACK_H) ey = RACK_Y0 + RACK_H - 1;
+        if (ey >= LCD_H) ey = LCD_H - 1;
+        if (sy < 0) continue;
+        int rows = ey - sy + 1;
+
+        memset(s_ring_buf, 0, LCD_W * rows * sizeof(uint16_t));
+
+        int band_center = RACK_Y0 + RACK_H / 2;
+        for (int y = sy; y <= ey; y++) {
+            /* Chevron: tilt stripes by cents deviation. At ±50 cents the tilt
+             * equals ±RACK_SEG_W pixels from center to band edge. */
+            int chevron = (int)(-s->cents * (float)RACK_SEG_W * fabsf((float)(y - band_center))
+                                / (50.0f * (float)(RACK_H / 2)));
+            for (int x = 0; x < LCD_W; x++) {
+                int rel = ((x - offset - chevron) % RACK_SEG_W + RACK_SEG_W) % RACK_SEG_W;
+                if (rel < lit_w)
+                    s_ring_buf[(y - sy) * LCD_W + x] = s->col_seg;
+            }
+        }
+
+        ili9341_draw_bitmap(0, sy, LCD_W, rows, s_ring_buf);
+    }
+
+    render_note_at(s->note, RACK_NOTE_Y0);
     render_bar(s->cents);
 }
 
@@ -242,15 +284,37 @@ static void render_mode(const strobe_state_t *s) {
     render_arc(s, 0);
 #elif STROBE_MODE == STROBE_MODE_ARC_CHECKER
     render_arc(s, 1);
+#elif STROBE_MODE == STROBE_MODE_RACK
+    render_rack(s);
+#endif
+}
+
+static void clear_strobe_region(void) {
+#if STROBE_MODE == STROBE_MODE_RACK
+    memset(s_ring_buf, 0, LCD_W * STRIP_H * sizeof(uint16_t));
+    for (int sy = RACK_Y0; sy < RACK_Y0 + RACK_H; sy += STRIP_H) {
+        int rows = sy + STRIP_H <= RACK_Y0 + RACK_H ? STRIP_H : (RACK_Y0 + RACK_H - sy);
+        ili9341_draw_bitmap(0, sy, LCD_W, rows, s_ring_buf);
+    }
 #else
-    render_arc(s, 1);  /* fallback until other modes are implemented */
+    memset(s_ring_buf, 0, RING_W * STRIP_H * sizeof(uint16_t));
+    for (int sy = RING_Y0; sy < RING_Y0 + RING_H; sy += STRIP_H) {
+        int rows = sy + STRIP_H <= RING_Y0 + RING_H ? STRIP_H : (RING_Y0 + RING_H - sy);
+        ili9341_draw_bitmap(RING_X0, sy, RING_W, rows, s_ring_buf);
+    }
+#endif
+    memset(s_note_buf, 0, NOTE_W * NOTE_H * sizeof(uint16_t));
+#if STROBE_MODE == STROBE_MODE_RACK
+    ili9341_draw_bitmap(NOTE_X0, RACK_NOTE_Y0, NOTE_W, NOTE_H, s_note_buf);
+#else
+    ili9341_draw_bitmap(NOTE_X0, NOTE_Y0, NOTE_W, NOTE_H, s_note_buf);
 #endif
 }
 
 /* ---- Public API --------------------------------------------------------------- */
 
 esp_err_t display_init(void) {
-    s_ring_buf = heap_caps_malloc(RING_W * STRIP_H * sizeof(uint16_t),
+    s_ring_buf = heap_caps_malloc(STRIP_BUF_W * STRIP_H * sizeof(uint16_t),
                                   MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     if (!s_ring_buf) { ESP_LOGE(TAG, "s_ring_buf alloc failed"); abort(); }
 
@@ -275,13 +339,7 @@ void display_render_strobe(float detected_hz, const char *note) {
 
     if (detected_hz <= 0.0f) {
         s_ref_hz = 0.0f;
-        memset(s_ring_buf, 0, RING_W * STRIP_H * sizeof(uint16_t));
-        for (int sy = RING_Y0; sy < RING_Y0 + RING_H; sy += STRIP_H) {
-            int rows = sy + STRIP_H <= RING_Y0 + RING_H ? STRIP_H : (RING_Y0 + RING_H - sy);
-            ili9341_draw_bitmap(RING_X0, sy, RING_W, rows, s_ring_buf);
-        }
-        memset(s_note_buf, 0, NOTE_W * NOTE_H * sizeof(uint16_t));
-        ili9341_draw_bitmap(NOTE_X0, NOTE_Y0, NOTE_W, NOTE_H, s_note_buf);
+        clear_strobe_region();
         render_bar(0.0f);
         return;
     }
