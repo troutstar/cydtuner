@@ -235,7 +235,7 @@ void display_render_strobe(float detected_hz, const char *note) {
      * visible with no wraparound, so motion direction becomes ambiguous at Nyquist and
      * the pattern appears to shake.  π/(2*N_SEG) keeps direction unambiguous at all speeds. */
     float dphi = 2.0f * (float)M_PI * (detected_hz - s_ref_hz) / s_ref_hz * K_SPEED * dt;
-    const float max_dphi = (float)M_PI / (2.0f * (float)N_SEG);
+    const float max_dphi = (float)M_PI / (10.0f * (float)N_SEG);
     if (dphi >  max_dphi) dphi =  max_dphi;
     if (dphi < -max_dphi) dphi = -max_dphi;
     s_phase += dphi;

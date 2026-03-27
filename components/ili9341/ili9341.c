@@ -50,7 +50,7 @@ esp_err_t ili9341_init(void) {
     ESP_RETURN_ON_ERROR(spi_bus_initialize(SPI2_HOST, &bus, SPI_DMA_CH_AUTO), TAG, "bus init failed");
 
     spi_device_interface_config_t dev = {
-        .clock_speed_hz = 40 * 1000 * 1000,
+        .clock_speed_hz = 80 * 1000 * 1000,
         .mode = 0, .spics_io_num = LCD_PIN_CS, .queue_size = 7,
     };
     ESP_RETURN_ON_ERROR(spi_bus_add_device(SPI2_HOST, &dev, &s_spi), TAG, "dev add failed");
