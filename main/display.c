@@ -35,7 +35,7 @@ static inline float fast_atan2f(float y, float x)
 #define CENTS_TO_RPM  0.3f   /* 1 RPM per cent, 30 RPM at 100 cents */
 #define COL_SEG     0xFFFF
 #define COL_BG      0x0000
-#define FILL_RATIO  0.90f     /* checkerboard halves pixel density, so double fill ratio */
+#define FILL_RATIO  0.45f     /* fraction of each segment arc that is lit */
 
 /* 100-degree arc centred at the top of the circle (-90 degrees in screen coords
  * where y increases downward).  Arc spans from -140 degrees to -40 degrees. */
@@ -278,7 +278,7 @@ void display_render_strobe(float detected_hz, const char *note) {
 
                 float rel = fmodf(angle - s_phase, seg_span);
                 if (rel < 0.0f) rel += seg_span;
-                if (rel < lit_span && (((x >> 1) + (y >> 1)) & 1) == 0)
+                if (rel < lit_span && (((x >> 2) + (y >> 2)) & 1) == 0)
                     s_ring_buf[(y - sy) * RING_W + (x - RING_X0)] = col_seg;
             }
         }
