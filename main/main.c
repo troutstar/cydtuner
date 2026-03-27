@@ -52,7 +52,7 @@ static void display_task(void *arg) {
     char note[4] = "-";
     for (;;) {
         float hz;
-        if (xQueueReceive(s_freq_q, &hz, pdMS_TO_TICKS(5)) == pdTRUE) {
+        if (xQueueReceive(s_freq_q, &hz, pdMS_TO_TICKS(33)) == pdTRUE) {
             if (hz > 0.0f) {
                 last = hz;
                 pitch_hz_to_note(hz, note, sizeof(note));
