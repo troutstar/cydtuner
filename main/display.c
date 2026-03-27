@@ -13,11 +13,12 @@ static const char *TAG = "display";
 #define STROBE_MODE_ARC_SOLID    0   /* solid white arc segments */
 #define STROBE_MODE_ARC_CHECKER  1   /* 8x8 checkerboard arc segments */
 #define STROBE_MODE_RACK         2   /* horizontal rack-style scrolling strobe */
+#define STROBE_MODE_MOIRE        3   /* two overlapping grids, moire interference */
 
 #define ORIENT_PORTRAIT          0
 #define ORIENT_LANDSCAPE         1
 
-#define STROBE_MODE   STROBE_MODE_RACK
+#define STROBE_MODE   STROBE_MODE_MOIRE
 #define ORIENTATION   ORIENT_LANDSCAPE
 
 /* ---- Display geometry ---------------------------------------------------------- */
@@ -58,9 +59,17 @@ static const char *TAG = "display";
 #define RACK_NOTE_Y0    150   /* note label below band */
 #define RACK_SPEED      4.0f  /* visual speed multiplier vs arc phase */
 
+/* Moire geometry */
+#define MOIRE_P1        10    /* static grid period in pixels */
+#define MOIRE_P2        11    /* moving grid period — difference creates interference bands */
+#define MOIRE_LINE_W     2    /* grid line width */
+#define MOIRE_SPEED      1.0f /* phase-to-scroll multiplier */
+#define MOIRE_H          160  /* rows used by moire pattern (top of screen) */
+#define MOIRE_NOTE_Y0    (MOIRE_H + (LCD_H - MOIRE_H - NOTE_H) / 2)  /* centred in bottom zone */
+
 /* Arc note position */
-#define NOTE_W   100
-#define NOTE_H   36
+#define NOTE_W   120
+#define NOTE_H   72
 #define NOTE_X0  (CX - NOTE_W / 2)
 #define NOTE_Y0  104
 
@@ -73,7 +82,7 @@ static const char *TAG = "display";
 /* ---- Minimal 8x8 bitmap font -------------------------------------------------- */
 #define GLYPH_W    8
 #define GLYPH_H    8
-#define NOTE_SCALE 4
+#define NOTE_SCALE 8
 
 typedef struct { char c; uint8_t rows[GLYPH_H]; } glyph_t;
 
@@ -153,7 +162,9 @@ static void render_bar(float cents) {
     ili9341_draw_bitmap(BAR_X0, BAR_Y0, BAR_W, BAR_H, s_bar_buf);
 }
 
-static void render_note_at(const char *ref_note, int y0) {
+/* Fill s_note_buf with glyph pixels (no blit). Used by both render_note_at
+ * and render_moire (cutout mask). */
+static void fill_note_buf(const char *ref_note, uint16_t color) {
     int nlen = (int)strlen(ref_note);
     const uint8_t *glyphs[4] = {NULL, NULL, NULL, NULL};
     for (int i = 0; i < nlen && i < 4; i++) glyphs[i] = glyph_lookup(ref_note[i]);
@@ -174,7 +185,7 @@ static void render_note_at(const char *ref_note, int y0) {
             int gcol = ((lx - txt_lx) % (GLYPH_W * NOTE_SCALE)) / NOTE_SCALE;
             const uint8_t *bmp = (ci < n_ltr) ? glyphs[ci] : NULL;
             if (bmp && (bmp[row_in_glyph] & (0x80 >> gcol)))
-                s_note_buf[ly * NOTE_W + lx] = COL_SEG;
+                s_note_buf[ly * NOTE_W + lx] = color;
         }
         if (n_dig) {
             int dig_row = (ly - txt_ly) / (NOTE_SCALE / 2);
@@ -183,12 +194,15 @@ static void render_note_at(const char *ref_note, int y0) {
                     int gcol = ((lx - ltr_lx1) % (GLYPH_W * (NOTE_SCALE / 2))) / (NOTE_SCALE / 2);
                     const uint8_t *bmp = glyphs[n_ltr];
                     if (bmp && (bmp[dig_row] & (0x80 >> gcol)))
-                        s_note_buf[ly * NOTE_W + lx] = COL_SEG;
+                        s_note_buf[ly * NOTE_W + lx] = color;
                 }
             }
         }
     }
+}
 
+static void render_note_at(const char *ref_note, int y0) {
+    fill_note_buf(ref_note, COL_SEG);
     ili9341_draw_bitmap(NOTE_X0, y0, NOTE_W, NOTE_H, s_note_buf);
 }
 
@@ -279,6 +293,54 @@ static void render_rack(const strobe_state_t *s) {
     render_bar(s->cents);
 }
 
+static void render_moire(const strobe_state_t *s) {
+    float phase_px = s->phase * (float)MOIRE_P2 * (float)N_SEG * MOIRE_SPEED
+                     / (2.0f * (float)M_PI);
+    int offset = (int)phase_px;
+
+    /* Top zone: moire pattern */
+    for (int sy = 0; sy < MOIRE_H; sy += STRIP_H) {
+        int ey = sy + STRIP_H - 1;
+        if (ey >= MOIRE_H) ey = MOIRE_H - 1;
+        int rows = ey - sy + 1;
+
+        for (int y = sy; y <= ey; y++) {
+            for (int x = 0; x < LCD_W; x++) {
+                int g1 = (x % MOIRE_P1) < MOIRE_LINE_W;
+                int g2 = ((x + offset) % MOIRE_P2 + MOIRE_P2) % MOIRE_P2 < MOIRE_LINE_W;
+                s_ring_buf[(y - sy) * LCD_W + x] = (g1 ^ g2) ? COL_SEG : COL_BG;
+            }
+        }
+
+        ili9341_draw_bitmap(0, sy, LCD_W, rows, s_ring_buf);
+    }
+
+    /* Bottom zone: black background, note label white or green when in tune */
+    uint16_t note_col = (fabsf(s->cents) <= 3.0f) ? 0xE007u : 0xFFFFu;
+    fill_note_buf(s->note, note_col);
+    const int ny0 = MOIRE_NOTE_Y0;
+    const int ny1 = ny0 + NOTE_H;
+
+    for (int sy = MOIRE_H; sy < LCD_H; sy += STRIP_H) {
+        int ey = sy + STRIP_H - 1;
+        if (ey >= LCD_H) ey = LCD_H - 1;
+        int rows = ey - sy + 1;
+
+        memset(s_ring_buf, 0, LCD_W * rows * sizeof(uint16_t));
+
+        for (int y = sy; y <= ey; y++) {
+            if (y < ny0 || y >= ny1) continue;
+            int note_row = y - ny0;
+            for (int x = NOTE_X0; x < NOTE_X0 + NOTE_W; x++) {
+                if (s_note_buf[note_row * NOTE_W + (x - NOTE_X0)] != 0)
+                    s_ring_buf[(y - sy) * LCD_W + x] = note_col;
+            }
+        }
+
+        ili9341_draw_bitmap(0, sy, LCD_W, rows, s_ring_buf);
+    }
+}
+
 static void render_mode(const strobe_state_t *s) {
 #if STROBE_MODE == STROBE_MODE_ARC_SOLID
     render_arc(s, 0);
@@ -286,11 +348,19 @@ static void render_mode(const strobe_state_t *s) {
     render_arc(s, 1);
 #elif STROBE_MODE == STROBE_MODE_RACK
     render_rack(s);
+#elif STROBE_MODE == STROBE_MODE_MOIRE
+    render_moire(s);
 #endif
 }
 
 static void clear_strobe_region(void) {
-#if STROBE_MODE == STROBE_MODE_RACK
+#if STROBE_MODE == STROBE_MODE_MOIRE
+    memset(s_ring_buf, 0, LCD_W * STRIP_H * sizeof(uint16_t));
+    for (int sy = 0; sy < LCD_H; sy += STRIP_H) {
+        int rows = (sy + STRIP_H <= LCD_H) ? STRIP_H : (LCD_H - sy);
+        ili9341_draw_bitmap(0, sy, LCD_W, rows, s_ring_buf);
+    }
+#elif STROBE_MODE == STROBE_MODE_RACK
     memset(s_ring_buf, 0, LCD_W * STRIP_H * sizeof(uint16_t));
     for (int sy = RACK_Y0; sy < RACK_Y0 + RACK_H; sy += STRIP_H) {
         int rows = sy + STRIP_H <= RACK_Y0 + RACK_H ? STRIP_H : (RACK_Y0 + RACK_H - sy);
@@ -303,11 +373,14 @@ static void clear_strobe_region(void) {
         ili9341_draw_bitmap(RING_X0, sy, RING_W, rows, s_ring_buf);
     }
 #endif
+/* moire mode owns the full screen — no note/bar regions to clear */
+#if STROBE_MODE != STROBE_MODE_MOIRE
     memset(s_note_buf, 0, NOTE_W * NOTE_H * sizeof(uint16_t));
-#if STROBE_MODE == STROBE_MODE_RACK
+#  if STROBE_MODE == STROBE_MODE_RACK
     ili9341_draw_bitmap(NOTE_X0, RACK_NOTE_Y0, NOTE_W, NOTE_H, s_note_buf);
-#else
+#  else
     ili9341_draw_bitmap(NOTE_X0, NOTE_Y0, NOTE_W, NOTE_H, s_note_buf);
+#  endif
 #endif
 }
 
@@ -340,7 +413,9 @@ void display_render_strobe(float detected_hz, const char *note) {
     if (detected_hz <= 0.0f) {
         s_ref_hz = 0.0f;
         clear_strobe_region();
+#if STROBE_MODE != STROBE_MODE_MOIRE
         render_bar(0.0f);
+#endif
         return;
     }
 
