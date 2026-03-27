@@ -36,7 +36,7 @@ static void pitch_task(void *arg) {
         int16_t *buf = NULL;
         if (xQueueReceive(s_sample_q, &buf, portMAX_DELAY) == pdTRUE) {
             float hz = pitch_detect(buf, AUDIO_BUF_SAMPLES, sr);
-            vTaskDelay(1); /* 1 tick (10ms @ 100Hz) lets IDLE1 run and reset WDT */
+            vTaskDelay(1); /* 1 tick (1ms @ 1000Hz) lets IDLE1 run and reset WDT */
             xSemaphoreGive(s_buf_sem);
             char note_log[4];
             pitch_hz_to_note(hz, note_log, sizeof(note_log));
@@ -52,7 +52,7 @@ static void display_task(void *arg) {
     char note[4] = "-";
     for (;;) {
         float hz;
-        if (xQueueReceive(s_freq_q, &hz, 0) == pdTRUE) {
+        if (xQueueReceive(s_freq_q, &hz, pdMS_TO_TICKS(5)) == pdTRUE) {
             if (hz > 0.0f) {
                 last = hz;
                 pitch_hz_to_note(hz, note, sizeof(note));
