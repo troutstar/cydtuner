@@ -32,7 +32,7 @@ static inline float fast_atan2f(float y, float x)
 #define R_INNER     60
 #define R_OUTER     114
 #define STRIP_H     8    /* render arc in horizontal strips; buf = RING_W*STRIP_H*2 ≈ 3KB */
-#define K_SPEED     29.0f
+#define CENTS_TO_RPM  0.3f   /* 1 RPM per cent, 30 RPM at 100 cents */
 #define COL_SEG     0xFFFF
 #define COL_BG      0x0000
 #define FILL_RATIO  0.45f     /* fraction of each segment arc that is lit */
@@ -229,15 +229,11 @@ void display_render_strobe(float detected_hz, const char *note) {
 
     float cents = 1200.0f * log2f(detected_hz / s_ref_hz);
 
-    /* Clamp per-frame delta to a quarter segment width — well below Nyquist.
-     * The full-circle version used π/N_SEG (half-segment = Nyquist limit), which was
-     * tolerable with 36-fold spatial redundancy.  On the 120° arc only ~12 segments are
-     * visible with no wraparound, so motion direction becomes ambiguous at Nyquist and
-     * the pattern appears to shake.  π/(2*N_SEG) keeps direction unambiguous at all speeds. */
-    float dphi = 2.0f * (float)M_PI * (detected_hz - s_ref_hz) / s_ref_hz * K_SPEED * dt;
-    const float max_dphi = (float)M_PI / 30.0f;  /* caps at ~30 RPM @ 30fps */
-    if (dphi >  max_dphi) dphi =  max_dphi;
-    if (dphi < -max_dphi) dphi = -max_dphi;
+    /* Rotation speed maps linearly from cents: 1 RPM per cent, 30 RPM at 100 cents.
+     * RPM = |cents| * 0.3  →  dphi/frame = RPM * 2π / (60 * fps)
+     * Sign from cents (positive = sharp = forward, negative = flat = backward). */
+    float rpm = cents * 0.3f;                          /* signed: ±30 RPM at ±100 cents */
+    float dphi = rpm * 2.0f * (float)M_PI * dt / 60.0f;
     s_phase += dphi;
     s_phase = fmodf(s_phase, 2.0f * (float)M_PI);
 
