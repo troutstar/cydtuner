@@ -9,7 +9,7 @@ Embedded firmware for a virtual stroboscopic tuner running on the 2.8inch ESP32-
 - **Target chip:** ESP32-D0WD-V3 (ESP32-WROOM-32E module)
 - **Display:** ILI9341V, 240x320, 4-line SPI
 - **Touch:** XPT2046 resistive, SPI
-- **Audio input (future):** I2S external sound card
+- **Audio input:** INMP441 I2S MEMS microphone (active), WM8782S I2S ADC (planned)
 - **Audio input (dev/test):** WAV reference files from SD card or embedded flash
 
 ## Hardware Pin Assignments
@@ -42,17 +42,24 @@ Embedded firmware for a virtual stroboscopic tuner running on the 2.8inch ESP32-
 | MOSI | IO23 |
 | MISO | IO19 |
 
+### INMP441 MEMS Mic (I2S0, master)
+| Signal | Pin |
+|---|---|
+| BCK | IO27 |
+| WS | IO26 |
+| SD (data in) | IO35 (input only) |
+| L/R | GND (left channel) |
+
 ### Other
 | Function | Pin |
 |---|---|
 | Audio enable | IO4 (low = enable) |
-| Audio DAC out | IO26 |
 | RGB LED Red | IO22 (low = on) |
 | RGB LED Green | IO16 (low = on) |
 | RGB LED Blue | IO17 (low = on) |
 | Battery ADC | IO34 (input only) |
 | BOOT button | IO0 |
-| IO35 | input only, do not use as output |
+| IO35 | input only — used as I2S data in |
 
 ## Architecture
 

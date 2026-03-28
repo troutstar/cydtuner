@@ -8,7 +8,6 @@
 #include "pitch.h"
 #include "display.h"
 #include "touch.h"
-#include "wifi.h"
 
 static const char *TAG = "main";
 
@@ -68,8 +67,7 @@ static void display_task(void *arg) {
 void app_main(void) {
     ESP_LOGI(TAG, "strobe tuner starting");
     ESP_ERROR_CHECK(ili9341_init());
-    ESP_ERROR_CHECK(wifi_sta_init());
-    ESP_ERROR_CHECK(audio_init(AUDIO_SOURCE_NETWORK));
+    ESP_ERROR_CHECK(audio_init(AUDIO_SOURCE_I2S));
     ESP_ERROR_CHECK(pitch_init(AUDIO_BUF_SAMPLES));
     ESP_ERROR_CHECK(display_init());
 

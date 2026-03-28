@@ -6,7 +6,6 @@
 typedef enum {
     AUDIO_SOURCE_WAV_FILE,
     AUDIO_SOURCE_I2S,
-    AUDIO_SOURCE_NETWORK,   /* raw int16 mono PCM via UDP port 1234 */
 #ifdef PITCH_TEST_HARNESS
     AUDIO_SOURCE_SYNTH,
 #endif

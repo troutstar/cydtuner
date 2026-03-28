@@ -1,5 +1,6 @@
 #include "audio.h"
 #include "driver/gpio.h"
+#include "driver/i2s_std.h"
 #include "driver/spi_common.h"
 #include <math.h>
 #include "driver/sdspi_host.h"
@@ -9,50 +10,8 @@
 #include "esp_check.h"
 #include <stdio.h>
 #include <string.h>
-#include "freertos/stream_buffer.h"
-#include "freertos/task.h"
-#include "lwip/sockets.h"
 
 static const char *TAG = "audio";
-
-#define AUDIO_BUF_SAMPLES 4096
-
-#define NET_AUDIO_PORT        1234
-#define NET_AUDIO_BUF_BYTES   (AUDIO_BUF_SAMPLES * 2 * 8)   /* 8 frames headroom */
-#define NET_AUDIO_SAMPLE_RATE 44100
-
-static StreamBufferHandle_t s_net_stream = NULL;
-
-static void udp_audio_task(void *arg)
-{
-    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (sock < 0) {
-        ESP_LOGE(TAG, "UDP socket create failed: errno %d", errno);
-        vTaskDelete(NULL);
-        return;
-    }
-
-    struct sockaddr_in addr = {
-        .sin_family      = AF_INET,
-        .sin_addr.s_addr = htonl(INADDR_ANY),
-        .sin_port        = htons(NET_AUDIO_PORT),
-    };
-    if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        ESP_LOGE(TAG, "UDP bind failed: errno %d", errno);
-        close(sock);
-        vTaskDelete(NULL);
-        return;
-    }
-    ESP_LOGI(TAG, "UDP audio listening on port %d", NET_AUDIO_PORT);
-
-    static uint8_t pkt[1472];  /* max UDP payload without fragmentation */
-    for (;;) {
-        int n = recv(sock, pkt, sizeof(pkt), 0);
-        if (n > 0) {
-            xStreamBufferSend(s_net_stream, pkt, (size_t)n, 0);
-        }
-    }
-}
 
 /*
  * Some older 2GB SD cards reject CMD59 (CRC_ON_OFF) with "illegal command".
@@ -70,12 +29,20 @@ esp_err_t __wrap_sdmmc_init_spi_crc(sdmmc_card_t *card)
     return ESP_OK;
 }
 
+#define AUDIO_BUF_SAMPLES 4096
 #define WAV_PATH          "/sdcard/sweep.wav"
 
 #define SD_PIN_CLK   18
 #define SD_PIN_MOSI  23
 #define SD_PIN_MISO  19
 #define SD_PIN_CS     5
+
+/* INMP441 I2S pins */
+#define I2S_PIN_BCK  27
+#define I2S_PIN_WS   26
+#define I2S_PIN_DIN  35
+
+static i2s_chan_handle_t  s_i2s_rx   = NULL;
 
 static audio_source_t s_source      = AUDIO_SOURCE_WAV_FILE;
 static uint32_t       s_sample_rate = 0;
@@ -113,13 +80,27 @@ esp_err_t audio_init(audio_source_t source) {
         return ESP_OK;
     }
 #endif
-    if (source == AUDIO_SOURCE_NETWORK) {
-        s_sample_rate = NET_AUDIO_SAMPLE_RATE;
-        s_net_stream  = xStreamBufferCreate(NET_AUDIO_BUF_BYTES, sizeof(int16_t));
-        if (!s_net_stream) { ESP_LOGE(TAG, "stream buffer alloc failed"); return ESP_ERR_NO_MEM; }
-        xTaskCreate(udp_audio_task, "udp_audio", 4096, NULL, 6, NULL);
-        ESP_LOGI(TAG, "network audio: UDP port %d, %lu sample/s",
-                 NET_AUDIO_PORT, (unsigned long)s_sample_rate);
+    if (source == AUDIO_SOURCE_I2S) {
+        i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+        ESP_RETURN_ON_ERROR(i2s_new_channel(&chan_cfg, NULL, &s_i2s_rx), TAG, "I2S channel create failed");
+
+        i2s_std_config_t std_cfg = {
+            .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(44100),
+            .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT,
+                                                             I2S_SLOT_MODE_MONO),
+            .gpio_cfg = {
+                .mclk = I2S_GPIO_UNUSED,
+                .bclk = I2S_PIN_BCK,
+                .ws   = I2S_PIN_WS,
+                .dout = I2S_GPIO_UNUSED,
+                .din  = I2S_PIN_DIN,
+                .invert_flags = { .mclk_inv = false, .bclk_inv = false, .ws_inv = false },
+            },
+        };
+        ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(s_i2s_rx, &std_cfg), TAG, "I2S std init failed");
+        ESP_RETURN_ON_ERROR(i2s_channel_enable(s_i2s_rx), TAG, "I2S enable failed");
+        s_sample_rate = 44100;
+        ESP_LOGI(TAG, "I2S source: INMP441, %lu sample/s", (unsigned long)s_sample_rate);
         return ESP_OK;
     }
     if (source != AUDIO_SOURCE_WAV_FILE) return ESP_ERR_NOT_SUPPORTED;
@@ -187,11 +168,19 @@ esp_err_t audio_init(audio_source_t source) {
 }
 
 int audio_read(int16_t *buf, size_t len) {
-    if (s_source == AUDIO_SOURCE_NETWORK) {
-        if (!s_net_stream) return -1;
-        size_t bytes_wanted = len * sizeof(int16_t);
-        size_t got = xStreamBufferReceive(s_net_stream, buf, bytes_wanted, pdMS_TO_TICKS(200));
-        return (int)(got / sizeof(int16_t));
+    if (s_source == AUDIO_SOURCE_I2S) {
+        if (!s_i2s_rx) return -1;
+        /* Reuse s_stereo_buf as raw 32-bit staging area — same byte count */
+        int32_t *raw = (int32_t *)s_stereo_buf;
+        size_t bytes_read = 0;
+        esp_err_t err = i2s_channel_read(s_i2s_rx, raw, len * sizeof(int32_t),
+                                          &bytes_read, pdMS_TO_TICKS(200));
+        if (err != ESP_OK) return -1;
+        int got = (int)(bytes_read / sizeof(int32_t));
+        /* INMP441: 24-bit audio left-justified in 32-bit slot → shift right 16 */
+        for (int i = 0; i < got; i++)
+            buf[i] = (int16_t)(raw[i] >> 16);
+        return got;
     }
 #ifdef PITCH_TEST_HARNESS
     if (s_source == AUDIO_SOURCE_SYNTH) {
