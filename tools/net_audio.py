@@ -75,7 +75,14 @@ def main():
     if not args.host:
         parser.error("host is required (use --list to find your ESP32's IP)")
 
-    stream(args.host, args.port, args.rate, args.chunk, args.device)
+    # Accept "ip:port" as a convenience
+    host = args.host
+    port = args.port
+    if ":" in host:
+        host, p = host.rsplit(":", 1)
+        port = int(p)
+
+    stream(host, port, args.rate, args.chunk, args.device)
 
 
 if __name__ == "__main__":

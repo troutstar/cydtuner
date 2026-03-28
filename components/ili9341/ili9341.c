@@ -14,8 +14,8 @@ static const char *TAG = "ili9341";
 #define LCD_PIN_MOSI  13
 #define LCD_PIN_MISO  12
 #define LCD_PIN_BL    21
-#define LCD_WIDTH    240
-#define LCD_HEIGHT   320
+#define LCD_WIDTH    320
+#define LCD_HEIGHT   240
 
 static spi_device_handle_t s_spi = NULL;
 
@@ -65,7 +65,7 @@ esp_err_t ili9341_init(void) {
     lcd_cmd(0xC1); lcd_byte(0x11);
     lcd_cmd(0xC5); lcd_data((uint8_t[]){0x35,0x3E}, 2);
     lcd_cmd(0xC7); lcd_byte(0xBE);
-    lcd_cmd(0x36); lcd_byte(0x88);   /* MADCTL: portrait 180°, BGR — USB connector at physical top */
+    lcd_cmd(0x36); lcd_byte(0xE8);   /* MADCTL: landscape 180°, BGR */
     lcd_cmd(0x3A); lcd_byte(0x55);   /* RGB565 */
     lcd_cmd(0xB1); lcd_data((uint8_t[]){0x00,0x1B}, 2);
     lcd_cmd(0xF2); lcd_byte(0x08);
