@@ -37,10 +37,9 @@ esp_err_t __wrap_sdmmc_init_spi_crc(sdmmc_card_t *card)
 #define SD_PIN_MISO  19
 #define SD_PIN_CS     5
 
-/* INMP441 I2S pins — uses SPI peripheral header + NC pad
- * BCK → IO18 (SPI/SD CLK pin, free when SD not in use)
- * WS  → IO27 (SPI CS pin, free when no SPI device attached)
- * DIN → IO35 (NC pad, input-only) */
+/* I2S pins — SPI peripheral header (IO18/IO27) + Expand Pin header (IO35)
+ * Used by both INMP441 and WM8782S (slave mode, left-justified format)
+ * BCK → IO18  WS → IO27  DIN → IO35 */
 #define I2S_PIN_BCK  18
 #define I2S_PIN_WS   27
 #define I2S_PIN_DIN  35
@@ -87,10 +86,15 @@ esp_err_t audio_init(audio_source_t source) {
         i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
         ESP_RETURN_ON_ERROR(i2s_new_channel(&chan_cfg, NULL, &s_i2s_rx), TAG, "I2S channel create failed");
 
+        /* Left-justified format (MSB), left channel only.
+         * Set module DIP switch to 1 (LJ) and jumper to Slave. */
+        i2s_std_slot_config_t slot_cfg =
+            I2S_STD_MSB_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_MONO);
+        slot_cfg.slot_mask = I2S_STD_SLOT_LEFT;
+
         i2s_std_config_t std_cfg = {
             .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(44100),
-            .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT,
-                                                             I2S_SLOT_MODE_MONO),
+            .slot_cfg = slot_cfg,
             .gpio_cfg = {
                 .mclk = I2S_GPIO_UNUSED,
                 .bclk = I2S_PIN_BCK,
@@ -103,7 +107,7 @@ esp_err_t audio_init(audio_source_t source) {
         ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(s_i2s_rx, &std_cfg), TAG, "I2S std init failed");
         ESP_RETURN_ON_ERROR(i2s_channel_enable(s_i2s_rx), TAG, "I2S enable failed");
         s_sample_rate = 44100;
-        ESP_LOGI(TAG, "I2S source: INMP441, %lu sample/s", (unsigned long)s_sample_rate);
+        ESP_LOGI(TAG, "I2S source: WM8782S, %lu sample/s", (unsigned long)s_sample_rate);
         return ESP_OK;
     }
     if (source != AUDIO_SOURCE_WAV_FILE) return ESP_ERR_NOT_SUPPORTED;

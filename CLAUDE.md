@@ -42,15 +42,35 @@ Embedded firmware for a virtual stroboscopic tuner running on the 2.8inch ESP32-
 | MOSI | IO23 |
 | MISO | IO19 |
 
-### INMP441 MEMS Mic (I2S0, master)
-IO18/IO27 are on the SPI peripheral header, free when SD card not in use.
-IO35 is on the Expand Pin header (input only).
+### I2S Audio Input (I2S0, ESP32 master)
+IO18/IO27 on SPI peripheral header, IO35 on Expand Pin header. Free when SD not in use.
+Shared pin assignment for both INMP441 and WM8782S.
 | Signal | Pin |
 |---|---|
 | BCK | IO18 |
 | WS | IO27 |
-| SD (data in) | IO35 |
+| DIN (data in) | IO35 |
+
+#### INMP441 MEMS mic
+| INMP441 | Connect to |
+|---|---|
+| SCK | IO18 |
+| WS | IO27 |
+| SD | IO35 |
 | L/R | GND (left channel) |
+| VDD | 3.3V |
+
+#### WM8782S ADC module (slave mode, left-justified)
+Set DIP switch to 1 (LJ). Set jumper to Slave.
+| WM8782S | Connect to |
+|---|---|
+| BICK | IO18 |
+| LRCK | IO27 |
+| DATA | IO35 |
+| DGND | GND (common with USB supply GND) |
+| VCC | 3.3V |
+| VCC-5V | USB supply 5V |
+| MCLK | not connected |
 
 ### Other
 | Function | Pin |
