@@ -43,12 +43,13 @@ Embedded firmware for a virtual stroboscopic tuner running on the 2.8inch ESP32-
 | MISO | IO19 |
 
 ### INMP441 MEMS Mic (I2S0, master)
-| Signal | Pin |
-|---|---|
-| BCK | IO27 |
-| WS | IO26 |
-| SD (data in) | IO35 (input only) |
-| L/R | GND (left channel) |
+Uses SPI peripheral header + NC pad. IO18/IO27 are free when SD card not in use.
+| Signal | Pin | Header pin |
+|---|---|---|
+| BCK | IO18 | SPI CLK |
+| WS | IO27 | SPI CS |
+| SD (data in) | IO35 | NC pad (input only) |
+| L/R | GND | left channel |
 
 ### Other
 | Function | Pin |
@@ -59,7 +60,8 @@ Embedded firmware for a virtual stroboscopic tuner running on the 2.8inch ESP32-
 | RGB LED Blue | IO17 (low = on) |
 | Battery ADC | IO34 (input only) |
 | BOOT button | IO0 |
-| IO35 | input only — used as I2S data in |
+| IO35 | NC pad, input only — used as I2S DIN |
+| Audio DAC out | IO26 | wired to SC8002B amp on-board — do not repurpose |
 
 ## Architecture
 

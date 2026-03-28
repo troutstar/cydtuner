@@ -37,9 +37,12 @@ esp_err_t __wrap_sdmmc_init_spi_crc(sdmmc_card_t *card)
 #define SD_PIN_MISO  19
 #define SD_PIN_CS     5
 
-/* INMP441 I2S pins */
-#define I2S_PIN_BCK  27
-#define I2S_PIN_WS   26
+/* INMP441 I2S pins — uses SPI peripheral header + NC pad
+ * BCK → IO18 (SPI/SD CLK pin, free when SD not in use)
+ * WS  → IO27 (SPI CS pin, free when no SPI device attached)
+ * DIN → IO35 (NC pad, input-only) */
+#define I2S_PIN_BCK  18
+#define I2S_PIN_WS   27
 #define I2S_PIN_DIN  35
 
 static i2s_chan_handle_t  s_i2s_rx   = NULL;
