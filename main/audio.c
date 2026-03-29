@@ -92,10 +92,10 @@ esp_err_t audio_init(audio_source_t source) {
             I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_MONO);
         slot_cfg.slot_mask = I2S_STD_SLOT_LEFT;
 
-        /* Module master mode, 48K jumper installed = 48kHz */
-        s_sample_rate = 48000;
+        /* Module master mode, 96K jumper installed = 96kHz */
+        s_sample_rate = 96000;
         i2s_std_config_t std_cfg = {
-            .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(48000),
+            .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(96000),
             .slot_cfg = slot_cfg,
             .gpio_cfg = {
                 .mclk = I2S_GPIO_UNUSED,
