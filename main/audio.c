@@ -86,15 +86,15 @@ esp_err_t audio_init(audio_source_t source) {
         i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_SLAVE);
         ESP_RETURN_ON_ERROR(i2s_new_channel(&chan_cfg, NULL, &s_i2s_rx), TAG, "I2S channel create failed");
 
-        /* Left-justified format (MSB), left channel only.
-         * Set module DIP switch to 1 (LJ) and jumper to Slave. */
+        /* Standard Philips I2S format, left channel only.
+         * Set module DIP switch to I2S position, jumper to Master. */
         i2s_std_slot_config_t slot_cfg =
-            I2S_STD_MSB_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_MONO);
+            I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_MONO);
         slot_cfg.slot_mask = I2S_STD_SLOT_LEFT;
 
         /* Slave mode: module drives BICK+LRCK from onboard crystal.
-         * 24.576MHz / 512fs = 48kHz. Tell pitch task the actual rate. */
-        s_sample_rate = 48000;
+         * Master mode: 96K=256fs or 192K=128fs. Default jumper = 96kHz. */
+        s_sample_rate = 96000;
         i2s_std_config_t std_cfg = {
             .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(48000),
             .slot_cfg = slot_cfg,
