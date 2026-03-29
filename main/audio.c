@@ -83,7 +83,7 @@ esp_err_t audio_init(audio_source_t source) {
     }
 #endif
     if (source == AUDIO_SOURCE_I2S) {
-        i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+        i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_SLAVE);
         ESP_RETURN_ON_ERROR(i2s_new_channel(&chan_cfg, NULL, &s_i2s_rx), TAG, "I2S channel create failed");
 
         /* Left-justified format (MSB), left channel only.
@@ -92,8 +92,11 @@ esp_err_t audio_init(audio_source_t source) {
             I2S_STD_MSB_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_MONO);
         slot_cfg.slot_mask = I2S_STD_SLOT_LEFT;
 
+        /* Slave mode: module drives BICK+LRCK from onboard crystal.
+         * 24.576MHz / 512fs = 48kHz. Tell pitch task the actual rate. */
+        s_sample_rate = 48000;
         i2s_std_config_t std_cfg = {
-            .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(44100),
+            .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(48000),
             .slot_cfg = slot_cfg,
             .gpio_cfg = {
                 .mclk = I2S_GPIO_UNUSED,
@@ -106,8 +109,7 @@ esp_err_t audio_init(audio_source_t source) {
         };
         ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(s_i2s_rx, &std_cfg), TAG, "I2S std init failed");
         ESP_RETURN_ON_ERROR(i2s_channel_enable(s_i2s_rx), TAG, "I2S enable failed");
-        s_sample_rate = 44100;
-        ESP_LOGI(TAG, "I2S source: WM8782S, %lu sample/s", (unsigned long)s_sample_rate);
+        ESP_LOGI(TAG, "I2S source: WM8782S slave, %lu sample/s", (unsigned long)s_sample_rate);
         return ESP_OK;
     }
     if (source != AUDIO_SOURCE_WAV_FILE) return ESP_ERR_NOT_SUPPORTED;
