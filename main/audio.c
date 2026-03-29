@@ -179,16 +179,26 @@ esp_err_t audio_init(audio_source_t source) {
 int audio_read(int16_t *buf, size_t len) {
     if (s_source == AUDIO_SOURCE_I2S) {
         if (!s_i2s_rx) return -1;
-        /* Reuse s_stereo_buf as raw 32-bit staging area — same byte count */
         int32_t *raw = (int32_t *)s_stereo_buf;
         size_t bytes_read = 0;
         esp_err_t err = i2s_channel_read(s_i2s_rx, raw, len * sizeof(int32_t),
                                           &bytes_read, pdMS_TO_TICKS(200));
         if (err != ESP_OK) return -1;
         int got = (int)(bytes_read / sizeof(int32_t));
-        /* INMP441: 24-bit audio left-justified in 32-bit slot → shift right 16 */
         for (int i = 0; i < got; i++)
             buf[i] = (int16_t)(raw[i] >> 16);
+
+        /* Debug: log peak every ~50 calls to check if audio is arriving */
+        static int s_dbg_count = 0;
+        if (++s_dbg_count >= 50) {
+            s_dbg_count = 0;
+            int32_t peak = 0;
+            for (int i = 0; i < got; i++) {
+                int32_t v = raw[i] < 0 ? -raw[i] : raw[i];
+                if (v > peak) peak = v;
+            }
+            ESP_LOGI(TAG, "I2S peak raw: %ld  got: %d", (long)peak, got);
+        }
         return got;
     }
 #ifdef PITCH_TEST_HARNESS
