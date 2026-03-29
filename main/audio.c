@@ -38,11 +38,11 @@ esp_err_t __wrap_sdmmc_init_spi_crc(sdmmc_card_t *card)
 #define SD_PIN_CS     5
 
 /* I2S pins — SPI peripheral header + Expand Pin header
- * BCK=IO18(SCK)  WS=IO23(MOSI)  DIN=IO35  MCLK=IO19(MISO) */
-#define I2S_PIN_BCK   18
-#define I2S_PIN_WS    23
-#define I2S_PIN_DIN   35
-#define I2S_PIN_MCLK  19
+ * BCK=IO18(SCK)  WS=IO23(MOSI)  DIN=IO35
+ * MCLK not driven — module self-clocks from onboard 24.576MHz crystal */
+#define I2S_PIN_BCK  18
+#define I2S_PIN_WS   23
+#define I2S_PIN_DIN  35
 
 static i2s_chan_handle_t  s_i2s_rx   = NULL;
 
@@ -92,14 +92,11 @@ esp_err_t audio_init(audio_source_t source) {
             I2S_STD_MSB_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_MONO);
         slot_cfg.slot_mask = I2S_STD_SLOT_LEFT;
 
-        i2s_std_clk_config_t clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(44100);
-        clk_cfg.mclk_multiple = I2S_MCLK_MULTIPLE_256;  /* MCLK = 256 * 44100 = ~11.29 MHz */
-
         i2s_std_config_t std_cfg = {
-            .clk_cfg  = clk_cfg,
+            .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(44100),
             .slot_cfg = slot_cfg,
             .gpio_cfg = {
-                .mclk = I2S_PIN_MCLK,
+                .mclk = I2S_GPIO_UNUSED,
                 .bclk = I2S_PIN_BCK,
                 .ws   = I2S_PIN_WS,
                 .dout = I2S_GPIO_UNUSED,
