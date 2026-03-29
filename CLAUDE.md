@@ -62,15 +62,15 @@ Shared pin assignment for both INMP441 and WM8782S.
 
 #### WM8782S ADC module (slave mode, left-justified)
 Set DIP switch to 1 (LJ). Set jumper to Slave.
-| WM8782S | Connect to |
-|---|---|
-| BICK | IO18 |
-| LRCK | IO27 |
-| DATA | IO35 |
-| DGND | GND (common with USB supply GND) |
-| VCC | 3.3V |
-| VCC-5V | USB supply 5V |
-| MCLK | not connected |
+SD card and touch disabled when WM8782S connected (shared SPI pins).
+| WM8782S | ESP32 Pin | SPI label |
+|---|---|---|
+| BICK | IO18 | SCK |
+| LRCK | IO23 | MOSI |
+| MCLK | IO19 | MISO |
+| DATA | IO35 | Expand Pin |
+| VCC | 5V | Serial port header |
+| GND | GND | |
 
 ### Other
 | Function | Pin |
