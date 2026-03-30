@@ -25,7 +25,7 @@ esp_err_t xpt2046_init(void) {
     gpio_config_t irq = {
         .pin_bit_mask = (1ULL << TOUCH_PIN_IRQ),
         .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_up_en = GPIO_PULLUP_DISABLE,  /* input-only pin; module has external PU */
     };
     gpio_config(&irq);
 

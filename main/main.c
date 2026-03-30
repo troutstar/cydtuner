@@ -3,11 +3,13 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "ili9341.h"
 #include "audio.h"
 #include "pitch.h"
 #include "display.h"
 #include "touch.h"
+#include "calib.h"
 
 static const char *TAG = "main";
 
@@ -47,9 +49,20 @@ static void pitch_task(void *arg) {
     }
 }
 
+/* Touch tap zones (raw XPT2046 ADC, 12-bit).
+ * Tap left ~quarter of screen to lower A4 by 1 Hz.
+ * Tap right ~quarter of screen to raise A4 by 1 Hz.
+ * Log raw values with ESP_LOGD("touch",...) to calibrate if needed. */
+#define TOUCH_X_LEFT_MAX   800    /* raw x below this = left tap  */
+#define TOUCH_X_RIGHT_MIN  3200   /* raw x above this = right tap */
+#define TOUCH_REPEAT_MS    400    /* minimum ms between A4 changes */
+
 static void display_task(void *arg) {
     float last = 440.0f;
     char note[4] = "-";
+    bool was_touched = false;
+    int64_t last_tap_us = esp_timer_get_time();  /* block spurious touches at startup */
+
     for (;;) {
         float hz;
         if (xQueueReceive(s_freq_q, &hz, pdMS_TO_TICKS(33)) == pdTRUE) {
@@ -61,12 +74,34 @@ static void display_task(void *arg) {
             }
         }
         display_render_strobe(last, note);
+
+        /* Touch: tap left to lower A4, tap right to raise A4 */
+        int tx = 0, ty = 0;
+        bool touched = touch_read(&tx, &ty);
+        if (touched && !was_touched) {
+            int64_t now = esp_timer_get_time();
+            ESP_LOGD("touch", "raw x=%d y=%d", tx, ty);
+            if (now - last_tap_us > TOUCH_REPEAT_MS * 1000LL) {
+                last_tap_us = now;
+                float a4 = calib_get_a4();
+                if (tx < TOUCH_X_LEFT_MAX) {
+                    calib_set_a4(a4 - 1.0f);
+                    display_set_a4(calib_get_a4());
+                } else if (tx > TOUCH_X_RIGHT_MIN) {
+                    calib_set_a4(a4 + 1.0f);
+                    display_set_a4(calib_get_a4());
+                }
+            }
+        }
+        was_touched = touched;
     }
 }
 
 void app_main(void) {
     ESP_LOGI(TAG, "strobe tuner starting");
+    ESP_ERROR_CHECK(calib_init());
     ESP_ERROR_CHECK(ili9341_init());
+    ESP_ERROR_CHECK(touch_init());
     ESP_ERROR_CHECK(audio_init(AUDIO_SOURCE_I2S));
     ESP_ERROR_CHECK(pitch_init(AUDIO_BUF_SAMPLES));
     ESP_ERROR_CHECK(display_init());

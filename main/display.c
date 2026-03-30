@@ -99,6 +99,7 @@ static const glyph_t s_glyphs[] = {
     {'G', {0x7C,0xC0,0xC0,0xCF,0xC3,0xC3,0x7E,0x00}},
     {'#', {0x24,0x24,0x7E,0x24,0x7E,0x24,0x24,0x00}},
     {'-', {0x00,0x00,0x00,0x7E,0x00,0x00,0x00,0x00}},
+    {'+', {0x00,0x18,0x18,0x7E,0x18,0x18,0x00,0x00}},
     {'0', {0x3C,0x66,0x6E,0x76,0x66,0x66,0x3C,0x00}},
     {'1', {0x18,0x38,0x18,0x18,0x18,0x18,0x7E,0x00}},
     {'2', {0x3C,0x66,0x06,0x0C,0x18,0x30,0x7E,0x00}},
@@ -118,9 +119,10 @@ static const uint8_t *glyph_lookup(char c) {
 }
 
 /* ---- Shared state ------------------------------------------------------------- */
-static float     s_phase  = 0.0f;
-static float     s_ref_hz = 0.0f;
-static int64_t   s_last_t = 0;
+static float     s_phase      = 0.0f;
+static float     s_ref_hz     = 0.0f;
+static int64_t   s_last_t     = 0;
+static float     s_a4_disp_hz = 440.0f;
 
 static uint16_t *s_ring_buf = NULL;
 static uint16_t *s_bar_buf  = NULL;
@@ -209,6 +211,73 @@ static void fill_note_buf(const char *ref_note, uint16_t color) {
 static void render_note_at(const char *ref_note, int y0) {
     fill_note_buf(ref_note, COL_SEG);
     ili9341_draw_bitmap(NOTE_X0, y0, NOTE_W, NOTE_H, s_note_buf);
+}
+
+/* ---- A4 header strip ----------------------------------------------------------- */
+/* Renders a 20-px strip at the top of the screen showing the A4 reference.
+ * Format: "- A4 440 +" where '-' (left) and '+' (right) indicate tap zones.
+ * Uses s_ring_buf in STRIP_H-row passes — call only when s_ring_buf is free. */
+
+#define A4_STRIP_H  20
+#define A4_SCALE     2   /* 16x16 px glyphs */
+
+static void render_glyph_to_buf(char c, int gx0, int gy0_abs,
+                                 int sy, int rows, uint16_t color)
+{
+    const uint8_t *bmp = glyph_lookup(c);
+    if (!bmp) return;
+    for (int row = 0; row < GLYPH_H; row++) {
+        for (int col = 0; col < GLYPH_W; col++) {
+            if (!(bmp[row] & (0x80 >> col))) continue;
+            for (int sr = 0; sr < A4_SCALE; sr++) {
+                int py = gy0_abs + row * A4_SCALE + sr;
+                if (py < sy || py >= sy + rows) continue;
+                for (int sc = 0; sc < A4_SCALE; sc++) {
+                    int px = gx0 + col * A4_SCALE + sc;
+                    if (px >= 0 && px < LCD_W)
+                        s_ring_buf[(py - sy) * LCD_W + px] = color;
+                }
+            }
+        }
+    }
+}
+
+static void render_a4_strip(void)
+{
+    char str[8];
+    snprintf(str, sizeof(str), "A4 %d", (int)(s_a4_disp_hz + 0.5f));
+
+    const int gw    = GLYPH_W * A4_SCALE;   /* 16 px per glyph */
+    const int gh    = GLYPH_H * A4_SCALE;   /* 16 px per glyph */
+    const int gy0   = (A4_STRIP_H - gh) / 2;  /* vertical offset in strip */
+    int       nch   = (int)strlen(str);
+    int       tx0   = (LCD_W - nch * gw) / 2; /* center text */
+
+    /* '-' tap indicator on the left, '+' on the right */
+    const int left_x  = 4;
+    const int right_x = LCD_W - gw - 4;
+
+    for (int sy = 0; sy < A4_STRIP_H; sy += STRIP_H) {
+        int rows = sy + STRIP_H <= A4_STRIP_H ? STRIP_H : (A4_STRIP_H - sy);
+        memset(s_ring_buf, 0, (size_t)(LCD_W * rows) * sizeof(uint16_t));
+
+        /* Center label */
+        for (int ci = 0; ci < nch; ci++)
+            render_glyph_to_buf(str[ci], tx0 + ci * gw, gy0, sy, rows, 0xFFFFu);
+
+        /* Tap-zone indicators */
+        render_glyph_to_buf('-', left_x,  gy0, sy, rows, 0x07E0u);  /* green */
+        render_glyph_to_buf('+', right_x, gy0, sy, rows, 0x07E0u);
+
+        ili9341_draw_bitmap(0, sy, LCD_W, rows, s_ring_buf);
+    }
+}
+
+void display_set_a4(float hz)
+{
+    if (hz == s_a4_disp_hz) return;
+    s_a4_disp_hz = hz;
+    render_a4_strip();
 }
 
 /* ---- Renderers ----------------------------------------------------------------- */
@@ -480,6 +549,7 @@ esp_err_t display_init(void) {
     if (!s_note_buf) { ESP_LOGE(TAG, "s_note_buf alloc failed"); abort(); }
 
     ili9341_fill_rect(0, 0, LCD_W, LCD_H, COL_BG);
+    render_a4_strip();
     s_last_t = esp_timer_get_time();
     return ESP_OK;
 }

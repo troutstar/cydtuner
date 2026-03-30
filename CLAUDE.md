@@ -60,8 +60,9 @@ Shared pin assignment for both INMP441 and WM8782S.
 | L/R | GND (left channel) |
 | VDD | 3.3V |
 
-#### WM8782S ADC module (slave mode, left-justified)
-Set DIP switch to 1 (LJ). Set jumper to Slave.
+#### WM8782S ADC module (master mode, I2S format)
+DIP switch: master mode, 24-bit. No jumper on format pins (= I2S). 96K jumper installed.
+ESP32 configured as I2S slave. Use **L RCA input only** — R input behaves differently and does not work reliably.
 SD card and touch disabled when WM8782S connected (shared SPI pins).
 | WM8782S | ESP32 Pin | SPI label |
 |---|---|---|

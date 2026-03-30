@@ -10,9 +10,14 @@ static const char * const s_note_names[] = {
     "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"
 };
 
+static float s_a4_hz = 440.0f;
+
+void pitch_set_a4(float hz) { if (hz > 0.0f) s_a4_hz = hz; }
+float pitch_get_a4(void)    { return s_a4_hz; }
+
 void pitch_hz_to_note(float hz, char *buf, size_t len) {
     if (hz < 20.0f || len < 2) { buf[0] = '-'; buf[1] = '\0'; return; }
-    int midi = (int)roundf(69.0f + 12.0f * log2f(hz / 440.0f));
+    int midi = (int)roundf(69.0f + 12.0f * log2f(hz / s_a4_hz));
     const char *name = s_note_names[((midi % 12) + 12) % 12];
     int octave = midi / 12 - 1;
     size_t i = 0;
@@ -22,9 +27,9 @@ void pitch_hz_to_note(float hz, char *buf, size_t len) {
 }
 
 float pitch_hz_to_nearest_hz(float hz) {
-    if (hz < 20.0f) return 440.0f;
-    int midi = (int)roundf(69.0f + 12.0f * log2f(hz / 440.0f));
-    return 440.0f * powf(2.0f, (float)(midi - 69) / 12.0f);
+    if (hz < 20.0f) return s_a4_hz;
+    int midi = (int)roundf(69.0f + 12.0f * log2f(hz / s_a4_hz));
+    return s_a4_hz * powf(2.0f, (float)(midi - 69) / 12.0f);
 }
 
 float pitch_hz_to_cents(float hz) {
@@ -55,7 +60,20 @@ esp_err_t pitch_init(size_t buf_len) {
     return ESP_OK;
 }
 
+/* Minimum peak amplitude to attempt pitch detection.
+ * WM8782S noise floor is near 0; a real guitar note is >>500 counts.
+ * Raise if you get false triggers; lower only if very quiet pickups miss. */
+#define PITCH_GATE_THRESHOLD  100
+
 float pitch_detect(const int16_t *buf, size_t len, float sample_rate) {
+    /* Gate: reject frames that are too quiet to be a real signal */
+    int32_t peak = 0;
+    for (size_t i = 0; i < len; i++) {
+        int32_t v = buf[i] < 0 ? -buf[i] : buf[i];
+        if (v > peak) peak = v;
+    }
+    if (peak < PITCH_GATE_THRESHOLD) return 0.0f;
+
     size_t half = (len / 2 < s_half) ? len / 2 : s_half;
 
     /* Copy to float working buffer — no pre-window; NSDF normalisation handles it */

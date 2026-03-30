@@ -187,17 +187,6 @@ int audio_read(int16_t *buf, size_t len) {
         for (int i = 0; i < got; i++)
             buf[i] = (int16_t)(raw[i] >> 16);
 
-        /* Debug: log peak every ~50 calls to check if audio is arriving */
-        static int s_dbg_count = 0;
-        if (++s_dbg_count >= 50) {
-            s_dbg_count = 0;
-            int32_t peak = 0;
-            for (int i = 0; i < got; i++) {
-                int32_t v = raw[i] < 0 ? -raw[i] : raw[i];
-                if (v > peak) peak = v;
-            }
-            ESP_LOGI(TAG, "I2S peak raw: %ld  got: %d", (long)peak, got);
-        }
         return got;
     }
 #ifdef PITCH_TEST_HARNESS
