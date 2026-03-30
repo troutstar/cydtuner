@@ -1,5 +1,10 @@
 # Project: ESP32 Strobe Tuner
 
+## Claude Behavior
+- Minimize tool calls. Do not make unnecessary tool calls.
+- Do not re-read files already read in the session. Cache what you've read.
+- Only read files explicitly needed for the current task.
+
 Embedded firmware for a virtual stroboscopic tuner running on the 2.8inch ESP32-32E display module (E32R28T). Built with ESP-IDF. Target is real-time pitch detection driving a strobe pattern on the ILI9341V display.
 
 ## Stack
