@@ -84,32 +84,36 @@ static const char *TAG = "display";
 /* ---- Minimal 8x8 bitmap font -------------------------------------------------- */
 #define GLYPH_W    8
 #define GLYPH_H    8
-#define NOTE_SCALE 8
-#define DIG_SCALE  3   /* superscript octave digit — smaller, top-right of main letter */
+#define NOTE_SCALE 6   /* main note letter: 48px per glyph — less chunky than 8x */
+#define DIG_SCALE  3   /* superscript octave digit */
+#define CENTS_SCALE 2  /* cents readout: same size as A4 strip */
+#define CENTS_Y0   (A4_STRIP_H + 4)
+#define CENTS_H    (GLYPH_H * CENTS_SCALE)
 
 typedef struct { char c; uint8_t rows[GLYPH_H]; } glyph_t;
 
+/* Bold full-width glyphs: 2px strokes, full 8-bit span */
 static const glyph_t s_glyphs[] = {
-    {'A', {0x3C,0x66,0x66,0x66,0x7E,0x66,0x66,0x00}},
-    {'B', {0x7C,0x66,0x66,0x7C,0x66,0x66,0x7C,0x00}},
-    {'C', {0x3C,0x66,0x60,0x60,0x60,0x66,0x3C,0x00}},
-    {'D', {0x78,0x6C,0x66,0x66,0x66,0x6C,0x78,0x00}},
-    {'E', {0x7E,0x60,0x60,0x7C,0x60,0x60,0x7E,0x00}},
-    {'F', {0xFE,0xC0,0xC0,0xFC,0xC0,0xC0,0xC0,0x00}},
-    {'G', {0x7C,0xC0,0xC0,0xCF,0xC3,0xC3,0x7E,0x00}},
-    {'#', {0x24,0x24,0x7E,0x24,0x7E,0x24,0x24,0x00}},
-    {'-', {0x00,0x00,0x00,0x7E,0x00,0x00,0x00,0x00}},
-    {'+', {0x00,0x18,0x18,0x7E,0x18,0x18,0x00,0x00}},
-    {'0', {0x3C,0x66,0x6E,0x76,0x66,0x66,0x3C,0x00}},
-    {'1', {0x18,0x38,0x18,0x18,0x18,0x18,0x7E,0x00}},
-    {'2', {0x3C,0x66,0x06,0x0C,0x18,0x30,0x7E,0x00}},
-    {'3', {0x3C,0x66,0x06,0x1C,0x06,0x66,0x3C,0x00}},
-    {'4', {0x06,0x0E,0x1E,0x36,0x7E,0x06,0x06,0x00}},
-    {'5', {0x7E,0x60,0x7C,0x06,0x06,0x66,0x3C,0x00}},
-    {'6', {0x3C,0x60,0x60,0x7C,0x66,0x66,0x3C,0x00}},
-    {'7', {0x7E,0x06,0x0C,0x18,0x18,0x18,0x18,0x00}},
-    {'8', {0x3C,0x66,0x66,0x3C,0x66,0x66,0x3C,0x00}},
-    {'9', {0x3C,0x66,0x66,0x3E,0x06,0x66,0x3C,0x00}},
+    {'A', {0x7E,0xC3,0xC3,0xC3,0xFF,0xC3,0xC3,0x00}},
+    {'B', {0xFE,0xC3,0xC3,0xFE,0xC3,0xC3,0xFE,0x00}},
+    {'C', {0x7E,0xC0,0xC0,0xC0,0xC0,0xC0,0x7E,0x00}},
+    {'D', {0xFC,0xC6,0xC3,0xC3,0xC3,0xC6,0xFC,0x00}},
+    {'E', {0xFF,0xC0,0xC0,0xFC,0xC0,0xC0,0xFF,0x00}},
+    {'F', {0xFF,0xC0,0xC0,0xFC,0xC0,0xC0,0xC0,0x00}},
+    {'G', {0x7E,0xC0,0xC0,0xCE,0xC3,0xC3,0x7E,0x00}},
+    {'#', {0x36,0x36,0xFF,0x36,0xFF,0x36,0x36,0x00}},
+    {'-', {0x00,0x00,0x00,0xFF,0x00,0x00,0x00,0x00}},
+    {'+', {0x00,0x18,0x18,0xFF,0x18,0x18,0x00,0x00}},
+    {'0', {0x7E,0xC3,0xC3,0xC3,0xC3,0xC3,0x7E,0x00}},
+    {'1', {0x18,0x38,0x78,0x18,0x18,0x18,0x7E,0x00}},
+    {'2', {0x7E,0xC3,0x03,0x3E,0x60,0xC0,0xFF,0x00}},
+    {'3', {0x7E,0xC3,0x03,0x3E,0x03,0xC3,0x7E,0x00}},
+    {'4', {0x06,0x0E,0x1E,0x36,0x66,0xFF,0x06,0x00}},
+    {'5', {0xFF,0xC0,0xC0,0xFE,0x03,0xC3,0x7E,0x00}},
+    {'6', {0x7E,0xC0,0xC0,0xFE,0xC3,0xC3,0x7E,0x00}},
+    {'7', {0xFF,0x03,0x06,0x0C,0x18,0x18,0x18,0x00}},
+    {'8', {0x7E,0xC3,0xC3,0x7E,0xC3,0xC3,0x7E,0x00}},
+    {'9', {0x7E,0xC3,0xC3,0x7F,0x03,0xC3,0x7E,0x00}},
 };
 
 static const uint8_t *glyph_lookup(char c) {
@@ -222,18 +226,18 @@ static void render_note_at(const char *ref_note, int y0) {
 #define A4_SCALE     2   /* 16x16 px glyphs */
 
 static void render_glyph_to_buf(char c, int gx0, int gy0_abs,
-                                 int sy, int rows, uint16_t color)
+                                 int sy, int rows, uint16_t color, int scale)
 {
     const uint8_t *bmp = glyph_lookup(c);
     if (!bmp) return;
     for (int row = 0; row < GLYPH_H; row++) {
         for (int col = 0; col < GLYPH_W; col++) {
             if (!(bmp[row] & (0x80 >> col))) continue;
-            for (int sr = 0; sr < A4_SCALE; sr++) {
-                int py = gy0_abs + row * A4_SCALE + sr;
+            for (int sr = 0; sr < scale; sr++) {
+                int py = gy0_abs + row * scale + sr;
                 if (py < sy || py >= sy + rows) continue;
-                for (int sc = 0; sc < A4_SCALE; sc++) {
-                    int px = gx0 + col * A4_SCALE + sc;
+                for (int sc = 0; sc < scale; sc++) {
+                    int px = gx0 + col * scale + sc;
                     if (px >= 0 && px < LCD_W)
                         s_ring_buf[(py - sy) * LCD_W + px] = color;
                 }
@@ -263,11 +267,11 @@ static void render_a4_strip(void)
 
         /* Center label */
         for (int ci = 0; ci < nch; ci++)
-            render_glyph_to_buf(str[ci], tx0 + ci * gw, gy0, sy, rows, 0xFFFFu);
+            render_glyph_to_buf(str[ci], tx0 + ci * gw, gy0, sy, rows, 0xFFFFu, A4_SCALE);
 
         /* Tap-zone indicators */
-        render_glyph_to_buf('-', left_x,  gy0, sy, rows, 0x07E0u);  /* green */
-        render_glyph_to_buf('+', right_x, gy0, sy, rows, 0x07E0u);
+        render_glyph_to_buf('-', left_x,  gy0, sy, rows, 0x07E0u, A4_SCALE);
+        render_glyph_to_buf('+', right_x, gy0, sy, rows, 0x07E0u, A4_SCALE);
 
         ili9341_draw_bitmap(0, sy, LCD_W, rows, s_ring_buf);
     }
@@ -331,12 +335,52 @@ static void render_arc(const strobe_state_t *s, int checker) {
     render_bar(s->cents);
 }
 
+static inline uint16_t scale_color565(uint16_t c, float t) {
+    int r = (int)(((c >> 11) & 0x1F) * t);
+    int g = (int)(((c >>  5) & 0x3F) * t);
+    int b = (int)( (c        & 0x1F) * t);
+    return (uint16_t)((r << 11) | (g << 5) | b);
+}
+
+static void render_cents_strip(float cents, int valid)
+{
+    char str[12] = "";
+    uint16_t txt_col = 0xFFFFu;
+    if (valid) {
+        int cv = (int)roundf(cents);
+        if      (cv > 0)  snprintf(str, sizeof(str), "+%d", cv);
+        else if (cv < 0)  snprintf(str, sizeof(str), "-%d", -cv);
+        else              snprintf(str, sizeof(str), "0");
+        txt_col = (fabsf(cents) <= 5.0f) ? 0x07E0u : 0xFFFFu;
+    }
+
+    int nch   = (int)strlen(str);
+    int txt_w = nch * GLYPH_W * CENTS_SCALE;
+    int tx0   = (LCD_W - txt_w) / 2;
+
+    for (int sy = CENTS_Y0; sy < CENTS_Y0 + CENTS_H; sy += STRIP_H) {
+        int rows = (sy + STRIP_H <= CENTS_Y0 + CENTS_H) ? STRIP_H : (CENTS_Y0 + CENTS_H - sy);
+        memset(s_ring_buf, 0, (size_t)(LCD_W * rows) * sizeof(uint16_t));
+        for (int ci = 0; ci < nch; ci++)
+            render_glyph_to_buf(str[ci], tx0 + ci * GLYPH_W * CENTS_SCALE,
+                                CENTS_Y0, sy, rows, txt_col, CENTS_SCALE);
+        ili9341_draw_bitmap(0, sy, LCD_W, rows, s_ring_buf);
+    }
+}
+
 static void render_rack(const strobe_state_t *s) {
-    /* Convert phase (radians) to pixel scroll offset.
-     * One full 2π cycle = N_SEG stripe periods of RACK_SEG_W pixels each. */
     float phase_px = s->phase * (float)RACK_SEG_W * (float)N_SEG * RACK_SPEED / (2.0f * (float)M_PI);
     int offset = (int)phase_px;
     int lit_w  = (int)(RACK_SEG_W * FILL_RATIO);
+
+    /* Precompute per-row glow color: quadratic falloff from band center */
+    uint16_t row_col[RACK_H];
+    float band_half = (float)(RACK_H / 2);
+    for (int i = 0; i < RACK_H; i++) {
+        float dist   = fabsf((float)i - band_half) / band_half;
+        float bright = 1.0f - dist * dist * 0.7f;
+        row_col[i] = scale_color565(s->col_seg, bright);
+    }
 
     for (int sy = RACK_Y0; sy < RACK_Y0 + RACK_H; sy += STRIP_H) {
         int ey = sy + STRIP_H - 1;
@@ -349,14 +393,13 @@ static void render_rack(const strobe_state_t *s) {
 
         int band_center = RACK_Y0 + RACK_H / 2;
         for (int y = sy; y <= ey; y++) {
-            /* Chevron: tilt stripes by cents deviation. At ±50 cents the tilt
-             * equals ±RACK_SEG_W pixels from center to band edge. */
+            uint16_t gcol = row_col[y - RACK_Y0];
             int chevron = (int)(-s->cents * (float)RACK_SEG_W * fabsf((float)(y - band_center))
                                 / (50.0f * (float)(RACK_H / 2)));
             for (int x = 0; x < LCD_W; x++) {
                 int rel = ((x - offset - chevron) % RACK_SEG_W + RACK_SEG_W) % RACK_SEG_W;
                 if (rel < lit_w)
-                    s_ring_buf[(y - sy) * LCD_W + x] = s->col_seg;
+                    s_ring_buf[(y - sy) * LCD_W + x] = gcol;
             }
         }
 
@@ -364,6 +407,7 @@ static void render_rack(const strobe_state_t *s) {
     }
 
     render_note_at(s->note, RACK_NOTE_Y0);
+    render_cents_strip(s->cents, 1);
 }
 
 static void render_moire_note_zone(const strobe_state_t *s) {
@@ -515,6 +559,7 @@ static void clear_strobe_region(void) {
         int rows = sy + STRIP_H <= RACK_Y0 + RACK_H ? STRIP_H : (RACK_Y0 + RACK_H - sy);
         ili9341_draw_bitmap(0, sy, LCD_W, rows, s_ring_buf);
     }
+    render_cents_strip(0.0f, 0);
 #else
     memset(s_ring_buf, 0, RING_W * STRIP_H * sizeof(uint16_t));
     for (int sy = RING_Y0; sy < RING_Y0 + RING_H; sy += STRIP_H) {
