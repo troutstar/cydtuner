@@ -34,16 +34,23 @@ static void audio_task(void *arg) {
 
 static void pitch_task(void *arg) {
     float sr = (float)audio_get_sample_rate();
+    static int s_log_count = 0;
     for (;;) {
         int16_t *buf = NULL;
         if (xQueueReceive(s_sample_q, &buf, portMAX_DELAY) == pdTRUE) {
+            int64_t t0 = esp_timer_get_time();
             float hz = pitch_detect(buf, AUDIO_BUF_SAMPLES, sr);
+            int64_t dt_us = esp_timer_get_time() - t0;
             vTaskDelay(1); /* 1 tick (1ms @ 1000Hz) lets IDLE1 run and reset WDT */
             xSemaphoreGive(s_buf_sem);
-            char note_log[4];
-            pitch_hz_to_note(hz, note_log, sizeof(note_log));
-            float cents_log = pitch_hz_to_cents(hz);
-            ESP_LOGI("pitch", "%.2f Hz  %s  %+.0f cents", hz, note_log, (double)cents_log);
+            if (++s_log_count >= 10) {
+                s_log_count = 0;
+                char note_log[4];
+                pitch_hz_to_note(hz, note_log, sizeof(note_log));
+                float cents_log = pitch_hz_to_cents(hz);
+                ESP_LOGI("pitch", "%.2f Hz  %s  %+.0f cents  [detect %lld us]",
+                         hz, note_log, (double)cents_log, dt_us);
+            }
             xQueueOverwrite(s_freq_q, &hz);
         }
     }
@@ -106,7 +113,7 @@ void app_main(void) {
     ESP_ERROR_CHECK(pitch_init(AUDIO_BUF_SAMPLES));
     ESP_ERROR_CHECK(display_init());
 
-    s_sample_q = xQueueCreate(1, sizeof(int16_t *));
+    s_sample_q = xQueueCreate(2, sizeof(int16_t *));
     s_freq_q   = xQueueCreate(1, sizeof(float));
     s_buf_sem  = xSemaphoreCreateCounting(2, 2);
 

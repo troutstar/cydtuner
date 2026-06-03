@@ -44,6 +44,8 @@ esp_err_t __wrap_sdmmc_init_spi_crc(sdmmc_card_t *card)
 #define I2S_PIN_WS   23
 #define I2S_PIN_DIN  35
 
+#define I2S_DECIMATE    4           /* downsample 96kHz → 24kHz before pitch detect */
+
 static i2s_chan_handle_t  s_i2s_rx   = NULL;
 
 static audio_source_t s_source      = AUDIO_SOURCE_WAV_FILE;
@@ -92,8 +94,8 @@ esp_err_t audio_init(audio_source_t source) {
             I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_MONO);
         slot_cfg.slot_mask = I2S_STD_SLOT_LEFT;
 
-        /* Module master mode, 96K jumper installed = 96kHz */
-        s_sample_rate = 96000;
+        /* Module master mode, 96K jumper installed = 96kHz; effective rate after decimation */
+        s_sample_rate = 96000 / I2S_DECIMATE;
         i2s_std_config_t std_cfg = {
             .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(96000),
             .slot_cfg = slot_cfg,
@@ -175,19 +177,34 @@ esp_err_t audio_init(audio_source_t source) {
     return ESP_OK;
 }
 
+/* Chunk buffer for I2S→int16 conversion + decimation. 256 int32 = 1 KB. */
+static int32_t s_i2s_chunk[256];
+
 int audio_read(int16_t *buf, size_t len) {
     if (s_source == AUDIO_SOURCE_I2S) {
         if (!s_i2s_rx) return -1;
-        int32_t *raw = (int32_t *)s_stereo_buf;
-        size_t bytes_read = 0;
-        esp_err_t err = i2s_channel_read(s_i2s_rx, raw, len * sizeof(int32_t),
-                                          &bytes_read, pdMS_TO_TICKS(200));
-        if (err != ESP_OK) return -1;
-        int got = (int)(bytes_read / sizeof(int32_t));
-        for (int i = 0; i < got; i++)
-            buf[i] = (int16_t)(raw[i] >> 16);
-
-        return got;
+        /* Read I2S_DECIMATE times as many 32-bit samples, decimate into buf.
+         * Process in chunks so we never need a full-frame scratch buffer. */
+        int out = 0;
+        size_t need = len * I2S_DECIMATE;   /* raw samples needed for len output */
+        while ((size_t)out < len && need > 0) {
+            size_t chunk = need < 256 ? need : 256;
+            size_t bytes_read = 0;
+            esp_err_t err = i2s_channel_read(s_i2s_rx, s_i2s_chunk,
+                                             chunk * sizeof(int32_t),
+                                             &bytes_read, pdMS_TO_TICKS(200));
+            if (err != ESP_OK || bytes_read == 0) break;
+            int got = (int)(bytes_read / sizeof(int32_t));
+            /* 4-tap average decimation: sum groups of I2S_DECIMATE samples */
+            for (int i = 0; i + I2S_DECIMATE - 1 < got && (size_t)out < len; i += I2S_DECIMATE) {
+                int32_t acc = 0;
+                for (int d = 0; d < I2S_DECIMATE; d++)
+                    acc += s_i2s_chunk[i + d] >> 16;
+                buf[out++] = (int16_t)(acc / I2S_DECIMATE);
+            }
+            need -= got;
+        }
+        return out;
     }
 #ifdef PITCH_TEST_HARNESS
     if (s_source == AUDIO_SOURCE_SYNTH) {

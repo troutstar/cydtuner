@@ -76,13 +76,19 @@ float pitch_detect(const int16_t *buf, size_t len, float sample_rate) {
 
     size_t half = (len / 2 < s_half) ? len / 2 : s_half;
 
-    /* Copy to float working buffer — no pre-window; NSDF normalisation handles it */
+    /* Copy to float working buffer with Hann window applied */
     float *wx = s_wbuf;
     for (size_t i = 0; i < half; i++)
-        wx[i] = (float)buf[i];
+        wx[i] = (float)buf[i] * s_window[i];
 
-    /* NSDF: s_diff[] = m[] (autocorrelation), s_cmnd[] = nsdf[] */
-    for (size_t tau = 0; tau < half; tau++) {
+    size_t tau_min = (size_t)(sample_rate / 1200.0f) + 1;
+    size_t tau_max = (size_t)(sample_rate / 40.0f);
+    if (tau_max >= half) tau_max = half - 1;
+
+    /* NSDF: only compute lags up to tau_max+1 (musical range); track global_max inline */
+    float global_max = 0.0f;
+    size_t tau_limit = (tau_max + 2 < half) ? tau_max + 2 : half;
+    for (size_t tau = 0; tau < tau_limit; tau++) {
         float m_val = 0.0f, r0s = 0.0f, r0e = 0.0f;
         for (size_t j = 0; j < half - tau; j++) {
             m_val += wx[j] * wx[j + tau];
@@ -94,16 +100,9 @@ float pitch_detect(const int16_t *buf, size_t len, float sample_rate) {
         float denom = r0s + r0e;
         s_diff[tau] = m_val;
         s_cmnd[tau] = (denom > 0.0f) ? 2.0f * m_val / denom : 0.0f;
+        if (s_cmnd[tau] > global_max) global_max = s_cmnd[tau];
     }
 
-    size_t tau_min = (size_t)(sample_rate / 1200.0f) + 1;
-    size_t tau_max = (size_t)(sample_rate / 40.0f);
-    if (tau_max >= half) tau_max = half - 1;
-
-    /* Global max for key maximum threshold */
-    float global_max = 0.0f;
-    for (size_t tau = 0; tau < half; tau++)
-        if (s_cmnd[tau] > global_max) global_max = s_cmnd[tau];
     float threshold = 0.8f * global_max;
 
     /* Key maximum selection: first local max above threshold in guitar range */
