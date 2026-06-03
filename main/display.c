@@ -4,8 +4,11 @@
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <math.h>
 #include <string.h>
+#include <stdio.h>
 
 static const char *TAG = "display";
 
@@ -54,12 +57,30 @@ static const char *TAG = "display";
 /* Strip buffer width — wide enough for both arc (RING_W=229) and rack (LCD_W=240) */
 #define STRIP_BUF_W  LCD_W
 
-/* Rack geometry */
-#define RACK_Y0         70    /* top of strobe band */
-#define RACK_H          60    /* height of strobe band */
-#define RACK_SEG_W      20    /* stripe period in pixels */
-#define RACK_NOTE_Y0    150   /* note label below band */
-#define RACK_SPEED      4.0f  /* visual speed multiplier vs arc phase */
+/* Rack geometry — centered layout: cents(16) + gap(8) + rack(75) + gap(8) + note(72) = 179px
+ * top margin = (230 usable - 179) / 2 = 25px */
+#define CENTS_Y0        25
+#define RACK_Y0         49    /* CENTS_Y0 + CENTS_H(16) + 8 */
+#define RACK_H          75
+#define RACK_NOTE_Y0    132   /* RACK_Y0 + RACK_H + 8 */
+#define RACK_SEG_W      20
+#define RACK_SPEED      4.0f
+
+/* Mode indicator dots */
+#define DOTS_Y          (LCD_H - 10)
+#define DOTS_SIZE        8
+#define DOTS_GAP         8
+
+/* Scope geometry */
+#define SCOPE_CY        100
+#define SCOPE_AMP        85
+#define SCOPE_INFO_Y    208
+#define SCOPE_COLOR     0x07E0u
+
+/* Precision frequency display (sysinfo mode) */
+#define FREQ_SCALE       4    /* 32px per glyph */
+#define FREQ_Y0         72    /* y of the Hz line */
+#define FREQ_NOTE_Y    130    /* y of note + cents context line */
 
 /* Moire geometry */
 #define MOIRE_P1        10    /* static grid period in pixels */
@@ -86,9 +107,9 @@ static const char *TAG = "display";
 #define GLYPH_H    8
 #define NOTE_SCALE 6   /* main note letter: 48px per glyph — less chunky than 8x */
 #define DIG_SCALE  3   /* superscript octave digit */
-#define CENTS_SCALE 2  /* cents readout: same size as A4 strip */
-#define CENTS_Y0   (A4_STRIP_H + 4)
-#define CENTS_H    (GLYPH_H * CENTS_SCALE)
+#define CENTS_SCALE 2
+#define CENTS_H    (GLYPH_H * CENTS_SCALE)   /* 16px */
+/* CENTS_Y0 defined in rack geometry above */
 
 typedef struct { char c; uint8_t rows[GLYPH_H]; } glyph_t;
 
@@ -114,6 +135,10 @@ static const glyph_t s_glyphs[] = {
     {'7', {0xFF,0x03,0x06,0x0C,0x18,0x18,0x18,0x00}},
     {'8', {0x7E,0xC3,0xC3,0x7E,0xC3,0xC3,0x7E,0x00}},
     {'9', {0x7E,0xC3,0xC3,0x7F,0x03,0xC3,0x7E,0x00}},
+    {'H', {0xC3,0xC3,0xC3,0xFF,0xC3,0xC3,0xC3,0x00}},
+    {'Z', {0xFF,0x03,0x06,0x0C,0x30,0x60,0xFF,0x00}},
+    {'.', {0x00,0x00,0x00,0x00,0x00,0x18,0x18,0x00}},
+    {'z', {0x00,0x00,0xFF,0x06,0x0C,0x30,0xFF,0x00}},
 };
 
 static const uint8_t *glyph_lookup(char c) {
@@ -126,7 +151,14 @@ static const uint8_t *glyph_lookup(char c) {
 static float     s_phase      = 0.0f;
 static float     s_ref_hz     = 0.0f;
 static int64_t   s_last_t     = 0;
-static float     s_a4_disp_hz = 440.0f;
+
+/* ---- Runtime display mode ------------------------------------------------------ */
+typedef enum { DISP_RACK = 0, DISP_SCOPE, DISP_SYSINFO, DISP_MODE_COUNT } disp_mode_t;
+static disp_mode_t s_disp_mode = DISP_RACK;
+
+/* ---- Scope buffer (written by pitch_task, read by display_task) ---------------- */
+static int16_t    s_scope_buf[LCD_W];
+static volatile int s_scope_valid = 0;
 
 static uint16_t *s_ring_buf = NULL;
 static uint16_t *s_bar_buf  = NULL;
@@ -217,13 +249,7 @@ static void render_note_at(const char *ref_note, int y0) {
     ili9341_draw_bitmap(NOTE_X0, y0, NOTE_W, NOTE_H, s_note_buf);
 }
 
-/* ---- A4 header strip ----------------------------------------------------------- */
-/* Renders a 20-px strip at the top of the screen showing the A4 reference.
- * Format: "- A4 440 +" where '-' (left) and '+' (right) indicate tap zones.
- * Uses s_ring_buf in STRIP_H-row passes — call only when s_ring_buf is free. */
-
-#define A4_STRIP_H  20
-#define A4_SCALE     2   /* 16x16 px glyphs */
+#define A4_SCALE     2   /* kept for render_glyph_to_buf call sites */
 
 static void render_glyph_to_buf(char c, int gx0, int gy0_abs,
                                  int sy, int rows, uint16_t color, int scale)
@@ -244,44 +270,6 @@ static void render_glyph_to_buf(char c, int gx0, int gy0_abs,
             }
         }
     }
-}
-
-static void render_a4_strip(void)
-{
-    char str[8];
-    snprintf(str, sizeof(str), "A4 %d", (int)(s_a4_disp_hz + 0.5f));
-
-    const int gw    = GLYPH_W * A4_SCALE;   /* 16 px per glyph */
-    const int gh    = GLYPH_H * A4_SCALE;   /* 16 px per glyph */
-    const int gy0   = (A4_STRIP_H - gh) / 2;  /* vertical offset in strip */
-    int       nch   = (int)strlen(str);
-    int       tx0   = (LCD_W - nch * gw) / 2; /* center text */
-
-    /* '-' tap indicator on the left, '+' on the right */
-    const int left_x  = 4;
-    const int right_x = LCD_W - gw - 4;
-
-    for (int sy = 0; sy < A4_STRIP_H; sy += STRIP_H) {
-        int rows = sy + STRIP_H <= A4_STRIP_H ? STRIP_H : (A4_STRIP_H - sy);
-        memset(s_ring_buf, 0, (size_t)(LCD_W * rows) * sizeof(uint16_t));
-
-        /* Center label */
-        for (int ci = 0; ci < nch; ci++)
-            render_glyph_to_buf(str[ci], tx0 + ci * gw, gy0, sy, rows, 0xFFFFu, A4_SCALE);
-
-        /* Tap-zone indicators */
-        render_glyph_to_buf('-', left_x,  gy0, sy, rows, 0x07E0u, A4_SCALE);
-        render_glyph_to_buf('+', right_x, gy0, sy, rows, 0x07E0u, A4_SCALE);
-
-        ili9341_draw_bitmap(0, sy, LCD_W, rows, s_ring_buf);
-    }
-}
-
-void display_set_a4(float hz)
-{
-    if (hz == s_a4_disp_hz) return;
-    s_a4_disp_hz = hz;
-    render_a4_strip();
 }
 
 /* ---- Renderers ----------------------------------------------------------------- */
@@ -578,7 +566,134 @@ static void clear_strobe_region(void) {
 #endif
 }
 
+/* ---- Mode dots ---------------------------------------------------------------- */
+
+static void render_mode_dots(void)
+{
+    int total_w = DISP_MODE_COUNT * DOTS_SIZE + (DISP_MODE_COUNT - 1) * DOTS_GAP;
+    int x0 = (LCD_W - total_w) / 2;
+    memset(s_ring_buf, 0, (size_t)(LCD_W * DOTS_SIZE) * sizeof(uint16_t));
+    for (int m = 0; m < (int)DISP_MODE_COUNT; m++) {
+        uint16_t col = (m == (int)s_disp_mode) ? 0xFFFFu : 0x4208u;
+        int dx = x0 + m * (DOTS_SIZE + DOTS_GAP);
+        for (int r = 1; r < DOTS_SIZE - 1; r++)
+            for (int c = 1; c < DOTS_SIZE - 1; c++)
+                s_ring_buf[r * LCD_W + dx + c] = col;
+    }
+    ili9341_draw_bitmap(0, DOTS_Y, LCD_W, DOTS_SIZE, s_ring_buf);
+}
+
+/* ---- Scope renderer ----------------------------------------------------------- */
+
+static void render_scope(float hz, const char *note, float cents)
+{
+    int ypos[LCD_W];
+    for (int x = 0; x < LCD_W; x++) {
+        int y = SCOPE_CY - (int)((float)s_scope_buf[x] * (float)SCOPE_AMP / 32767.0f);
+        if (y < 0) y = 0;
+        if (y >= SCOPE_INFO_Y) y = SCOPE_INFO_Y - 1;
+        ypos[x] = y;
+    }
+
+    for (int sy = 0; sy < SCOPE_INFO_Y; sy += STRIP_H) {
+        int rows = (sy + STRIP_H <= SCOPE_INFO_Y) ? STRIP_H : (SCOPE_INFO_Y - sy);
+        memset(s_ring_buf, 0, (size_t)(LCD_W * rows) * sizeof(uint16_t));
+        if (s_scope_valid) {
+            for (int x = 0; x < LCD_W; x++) {
+                int yc = ypos[x];
+                int yp = (x > 0) ? ypos[x - 1] : yc;
+                int ylo = yc < yp ? yc : yp;
+                int yhi = yc > yp ? yc : yp;
+                for (int y = ylo; y <= yhi; y++)
+                    if (y >= sy && y < sy + rows)
+                        s_ring_buf[(y - sy) * LCD_W + x] = SCOPE_COLOR;
+            }
+        }
+        ili9341_draw_bitmap(0, sy, LCD_W, rows, s_ring_buf);
+    }
+
+    /* Bottom info bar */
+    char info[40];
+    if (hz > 0.0f)
+        snprintf(info, sizeof(info), "%s  %.1fHz  %+dc", note, (double)hz, (int)roundf(cents));
+    else
+        snprintf(info, sizeof(info), "---");
+    int nch = (int)strlen(info);
+    int iw  = nch * GLYPH_W * 2;
+    int ix0 = (LCD_W - iw) / 2;
+    for (int sy = SCOPE_INFO_Y; sy < DOTS_Y; sy += STRIP_H) {
+        int rows = (sy + STRIP_H <= DOTS_Y) ? STRIP_H : (DOTS_Y - sy);
+        memset(s_ring_buf, 0, (size_t)(LCD_W * rows) * sizeof(uint16_t));
+        for (int ci = 0; ci < nch; ci++)
+            render_glyph_to_buf(info[ci], ix0 + ci * GLYPH_W * 2,
+                                SCOPE_INFO_Y, sy, rows, 0xFFFFu, 2);
+        ili9341_draw_bitmap(0, sy, LCD_W, rows, s_ring_buf);
+    }
+
+    render_mode_dots();
+}
+
+/* ---- Sysinfo renderer --------------------------------------------------------- */
+
+static void render_sysinfo(float hz, const char *note, float cents)
+{
+    char hz_str[16]  = "";
+    char ctx_str[16] = "";
+    int  hz_x0 = 0,  hz_nch = 0;
+    int  ctx_x0 = 0, ctx_nch = 0;
+
+    if (hz > 0.0f) {
+        snprintf(hz_str,  sizeof(hz_str),  "%.2f Hz", (double)hz);
+        snprintf(ctx_str, sizeof(ctx_str), "%s  %+d cents", note, (int)roundf(cents));
+        hz_nch  = (int)strlen(hz_str);
+        ctx_nch = (int)strlen(ctx_str);
+        hz_x0   = (LCD_W - hz_nch  * GLYPH_W * FREQ_SCALE) / 2;
+        ctx_x0  = (LCD_W - ctx_nch * GLYPH_W * 2) / 2;
+        if (hz_x0  < 0) hz_x0  = 0;
+        if (ctx_x0 < 0) ctx_x0 = 0;
+    }
+
+    for (int sy = 0; sy < DOTS_Y; sy += STRIP_H) {
+        int rows = (sy + STRIP_H <= DOTS_Y) ? STRIP_H : (DOTS_Y - sy);
+        memset(s_ring_buf, 0, (size_t)(LCD_W * rows) * sizeof(uint16_t));
+        if (hz > 0.0f) {
+            for (int ci = 0; ci < hz_nch; ci++)
+                render_glyph_to_buf(hz_str[ci],
+                                    hz_x0 + ci * GLYPH_W * FREQ_SCALE,
+                                    FREQ_Y0, sy, rows, 0xFFFFu, FREQ_SCALE);
+            for (int ci = 0; ci < ctx_nch; ci++)
+                render_glyph_to_buf(ctx_str[ci],
+                                    ctx_x0 + ci * GLYPH_W * 2,
+                                    FREQ_NOTE_Y, sy, rows, 0x07E0u, 2);
+        }
+        ili9341_draw_bitmap(0, sy, LCD_W, rows, s_ring_buf);
+    }
+
+    render_mode_dots();
+}
+
 /* ---- Public API --------------------------------------------------------------- */
+
+void display_set_scope(const int16_t *buf, int len)
+{
+    int start = 0;
+    int limit = len - LCD_W - 1;
+    if (limit > 0) {
+        for (int i = 1; i < limit; i++) {
+            if (buf[i - 1] < 0 && buf[i] >= 0) { start = i; break; }
+        }
+    }
+    int copy = len - start;
+    if (copy > LCD_W) copy = LCD_W;
+    memcpy(s_scope_buf, buf + start, (size_t)copy * sizeof(int16_t));
+    s_scope_valid = 1;
+}
+
+void display_next_mode(void)
+{
+    s_disp_mode = (disp_mode_t)((int)(s_disp_mode + 1) % (int)DISP_MODE_COUNT);
+    ili9341_fill_rect(0, 0, LCD_W, LCD_H, COL_BG);
+}
 
 esp_err_t display_init(void) {
     s_ring_buf = heap_caps_malloc(STRIP_BUF_W * STRIP_H * sizeof(uint16_t),
@@ -594,7 +709,7 @@ esp_err_t display_init(void) {
     if (!s_note_buf) { ESP_LOGE(TAG, "s_note_buf alloc failed"); abort(); }
 
     ili9341_fill_rect(0, 0, LCD_W, LCD_H, COL_BG);
-    render_a4_strip();
+    render_mode_dots();
     s_last_t = esp_timer_get_time();
     return ESP_OK;
 }
@@ -605,12 +720,23 @@ void display_render_strobe(float detected_hz, const char *note) {
     if (dt > 0.1f) dt = 0.1f;
     s_last_t = now;
 
+    float cents_simple = (detected_hz > 0.0f) ? pitch_hz_to_cents(detected_hz) : 0.0f;
+
+    /* Route non-rack modes directly */
+    if (s_disp_mode == DISP_SCOPE) {
+        render_scope(detected_hz, note, cents_simple);
+        return;
+    }
+    if (s_disp_mode == DISP_SYSINFO) {
+        render_sysinfo(detected_hz, note, cents_simple);
+        return;
+    }
+
+    /* RACK mode */
     if (detected_hz <= 0.0f) {
         s_ref_hz = 0.0f;
         clear_strobe_region();
-#if STROBE_MODE == STROBE_MODE_ARC_SOLID || STROBE_MODE == STROBE_MODE_ARC_CHECKER
-        render_bar(0.0f);
-#endif
+        render_mode_dots();
         return;
     }
 
@@ -621,10 +747,8 @@ void display_render_strobe(float detected_hz, const char *note) {
         s_ref_hz = nearest_hz;
 
     float cents = 1200.0f * log2f(detected_hz / s_ref_hz);
-
-    /* Phase: 1 RPM per cent, 30 RPM at 100 cents */
-    float rpm  = cents * CENTS_TO_RPM;
-    float dphi = rpm * 2.0f * (float)M_PI * dt / 60.0f;
+    float rpm   = cents * CENTS_TO_RPM;
+    float dphi  = rpm * 2.0f * (float)M_PI * dt / 60.0f;
     s_phase += dphi;
     s_phase = fmodf(s_phase, 2.0f * (float)M_PI);
 
@@ -639,4 +763,5 @@ void display_render_strobe(float detected_hz, const char *note) {
     };
 
     render_mode(&state);
+    render_mode_dots();
 }

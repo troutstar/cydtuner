@@ -41,6 +41,7 @@ static void pitch_task(void *arg) {
             int64_t t0 = esp_timer_get_time();
             float hz = pitch_detect(buf, AUDIO_BUF_SAMPLES, sr);
             int64_t dt_us = esp_timer_get_time() - t0;
+            display_set_scope(buf, AUDIO_BUF_SAMPLES);
             vTaskDelay(1); /* 1 tick (1ms @ 1000Hz) lets IDLE1 run and reset WDT */
             xSemaphoreGive(s_buf_sem);
             if (++s_log_count >= 10) {
@@ -56,13 +57,7 @@ static void pitch_task(void *arg) {
     }
 }
 
-/* Touch tap zones (raw XPT2046 ADC, 12-bit).
- * Tap left ~quarter of screen to lower A4 by 1 Hz.
- * Tap right ~quarter of screen to raise A4 by 1 Hz.
- * Log raw values with ESP_LOGD("touch",...) to calibrate if needed. */
-#define TOUCH_X_LEFT_MAX   800    /* raw x below this = left tap  */
-#define TOUCH_X_RIGHT_MIN  3200   /* raw x above this = right tap */
-#define TOUCH_REPEAT_MS    400    /* minimum ms between A4 changes */
+#define TOUCH_REPEAT_MS    400    /* minimum ms between mode changes */
 
 static void display_task(void *arg) {
     float last = 440.0f;
@@ -82,22 +77,14 @@ static void display_task(void *arg) {
         }
         display_render_strobe(last, note);
 
-        /* Touch: tap left to lower A4, tap right to raise A4 */
+        /* Touch: tap anywhere to cycle display mode */
         int tx = 0, ty = 0;
         bool touched = touch_read(&tx, &ty);
         if (touched && !was_touched) {
             int64_t now = esp_timer_get_time();
-            ESP_LOGD("touch", "raw x=%d y=%d", tx, ty);
             if (now - last_tap_us > TOUCH_REPEAT_MS * 1000LL) {
                 last_tap_us = now;
-                float a4 = calib_get_a4();
-                if (tx < TOUCH_X_LEFT_MAX) {
-                    calib_set_a4(a4 - 1.0f);
-                    display_set_a4(calib_get_a4());
-                } else if (tx > TOUCH_X_RIGHT_MIN) {
-                    calib_set_a4(a4 + 1.0f);
-                    display_set_a4(calib_get_a4());
-                }
+                display_next_mode();
             }
         }
         was_touched = touched;
